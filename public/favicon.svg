@@ -1,0 +1,15 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Hexagon node (the router) -->
+  <circle cx="16" cy="10" r="4.5" fill="none" stroke="currentColor" stroke-width="2" />
+  <!-- Branch 1 — left (cache) -->
+  <line x1="12.5" y1="13.5" x2="5" y2="24" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+  <circle cx="5" cy="24" r="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+  <!-- Branch 2 — center (local) -->
+  <line x1="16" y1="14.5" x2="16" y2="26" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+  <circle cx="16" cy="26" r="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+  <!-- Branch 3 — right (remote) -->
+  <line x1="19.5" y1="13.5" x2="27" y2="24" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+  <circle cx="27" cy="24" r="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+  <!-- Center dot -->
+  <circle cx="16" cy="10" r="1.5" fill="currentColor" />
+</svg>

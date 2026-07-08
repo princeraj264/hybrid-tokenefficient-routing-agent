@@ -80,7 +80,7 @@ export default function ChatInput({
         <button
           onClick={handleSend}
           disabled={disabled || !value.trim()}
-          className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-accent text-white hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:active:scale-100 transition-all duration-150 cursor-pointer"
+          className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-xl bg-accent text-white hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:active:scale-100 transition-all duration-150 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2"
           aria-label="Send message"
         >
           {disabled ? (

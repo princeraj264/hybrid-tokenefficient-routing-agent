@@ -1,10 +1,13 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { Moon, Sun, BarChart3 } from 'lucide-react';
 import ChatMessages from './components/ChatMessages';
 import ChatInput from './components/ChatInput';
 import SessionSummary from './components/SessionSummary';
 import { queryAgent } from './lib/api';
 import type { Message, SessionStats } from './types';
 import type { QueryResponse } from './lib/api';
+
+type Theme = 'dark' | 'light';
 
 function now(): number {
   return Date.now();
@@ -36,6 +39,25 @@ export default function App() {
     estimatedRemoteTokens: 0,
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // ── Theme ──────────────────────────────────────────
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof window === 'undefined') return 'dark';
+    return window.matchMedia('(prefers-color-scheme: light)').matches
+      ? 'light'
+      : 'dark';
+  });
+
+  // Sync data-theme attribute on <html>
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  }, []);
+
+  // ── Handlers ───────────────────────────────────────
 
   /** Process a successful API response. */
   const handleSuccess = useCallback(
@@ -145,17 +167,37 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
         <header className="flex items-center justify-between px-4 py-2.5 border-b border-border/50 bg-background/95 backdrop-blur-sm">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <h1 className="text-sm font-semibold text-foreground/80">Hybrid Routing Agent</h1>
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-2 h-2 rounded-full bg-accent animate-pulse shrink-0" />
+            <h1 className="text-sm font-semibold text-foreground/80 truncate">
+              Hybrid Token-Efficient Router
+            </h1>
           </div>
-          {/* Mobile sidebar toggle */}
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="md:hidden text-xs text-foreground/50 hover:text-foreground/80 px-2 py-1 rounded-lg border border-border/30 hover:bg-muted transition-all duration-150 cursor-pointer"
-          >
-            Stats
-          </button>
+
+          <div className="flex items-center gap-1.5">
+            {/* Theme toggle */}
+            <button
+              onClick={toggleTheme}
+              className="text-foreground/40 hover:text-foreground/70 p-1.5 rounded-lg hover:bg-muted transition-all duration-150 cursor-pointer active:scale-95"
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? (
+                <Sun className="w-4 h-4" aria-hidden="true" />
+              ) : (
+                <Moon className="w-4 h-4" aria-hidden="true" />
+              )}
+            </button>
+
+            {/* Mobile sidebar toggle — hidden on md+ (768px) */}
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="md:hidden flex items-center gap-1.5 text-xs text-foreground/50 hover:text-foreground/80 px-2.5 py-1.5 rounded-lg border border-border/30 hover:bg-muted transition-all duration-150 cursor-pointer"
+              aria-label="Toggle session stats panel"
+            >
+              <BarChart3 className="w-3.5 h-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Stats</span>
+            </button>
+          </div>
         </header>
 
         <ChatMessages messages={messages} loading={loading} />

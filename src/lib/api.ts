@@ -38,10 +38,11 @@ export async function queryAgent(text: string): Promise<QueryResponse> {
 
   const data = await res.json();
 
-  // Normalise response — the backend may return snake_case or camelCase
+  // Normalise response — the backend may return snake_case, camelCase, or 'cache_hit'
+  const rawPath: string = data.path ?? data.route ?? 'remote';
   return {
     content: data.content ?? data.answer ?? '',
-    path: data.path ?? data.route ?? 'remote',
+    path: rawPath === 'cache_hit' ? 'cache' : rawPath,
     confidence: data.confidence ?? 0,
     tokensUsed: data.tokensUsed ?? data.tokens_used ?? 0,
     latencyMs: data.latencyMs ?? data.latency_ms ?? 0,

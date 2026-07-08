@@ -28,9 +28,9 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
       <div className={`max-w-[80%] space-y-1.5 ${isUser ? 'items-end' : 'items-start'}`}>
         {/* Message bubble */}
         <div
-          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+          className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed break-words overflow-wrap-anywhere ${
             isUser
-              ? 'bg-primary text-on-primary rounded-br-md'
+              ? 'bg-primary text-on-primary rounded-br-md shadow-message'
               : 'bg-secondary text-foreground rounded-bl-md border border-border/30'
           }`}
         >

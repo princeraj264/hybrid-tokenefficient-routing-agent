@@ -305,7 +305,7 @@ export default function SessionSummary({
 
   /* ----- Desktop sidebar (always visible) ----- */
   return (
-    <aside className="w-72 flex-shrink-0 border-l border-border/50 bg-background/95 backdrop-blur-sm hidden md:flex flex-col">
+    <aside className="w-72 flex-shrink-0 border-l border-border/50 bg-background/95 backdrop-blur-sm hidden md:flex flex-col shadow-card">
       {content}
     </aside>
   );

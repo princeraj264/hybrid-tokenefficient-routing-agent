@@ -17,7 +17,7 @@ export default function ChatMessages({ messages, loading }: ChatMessagesProps) {
 
   if (messages.length === 0 && !loading) {
     return (
-      <div className="flex-1 flex items-center justify-center px-4">
+      <div className="flex-1 flex items-center justify-center px-4 animate-scale-in">
         <div className="text-center space-y-3 max-w-sm">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-muted border border-border/30">
             <MessageSquare className="w-6 h-6 text-foreground/40" />
@@ -40,12 +40,12 @@ export default function ChatMessages({ messages, loading }: ChatMessagesProps) {
       ))}
 
       {loading && (
-        <div className="flex justify-start px-4 py-1.5">
-          <div className="bg-secondary text-foreground border border-border/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm">
+        <div className="flex justify-start px-4 py-1.5 animate-fade-in">
+          <div className="bg-secondary text-foreground border border-border/30 rounded-2xl rounded-bl-md px-4 py-2.5 text-sm shadow-message">
             <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-bounce" style={{ animationDelay: '300ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-pulse-dot" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-pulse-dot" style={{ animationDelay: '300ms' }} />
+              <span className="w-1.5 h-1.5 rounded-full bg-foreground/40 animate-pulse-dot" style={{ animationDelay: '600ms' }} />
             </span>
           </div>
         </div>

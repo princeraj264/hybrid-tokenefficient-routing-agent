@@ -27,6 +27,13 @@ const routeMeta: Record<RoutePath, { label: string; icon: typeof Zap; colorClass
   },
 };
 
+/** Fallback for unexpected path values from the backend. */
+const fallbackMeta = {
+  label: 'Route',
+  icon: Globe,
+  colorClass: 'text-foreground/50 border-border/30 bg-muted/50',
+};
+
 const routeDescriptions: Record<RoutePath, string> = {
   cache: 'Response served from the semantic cache — instant, zero token cost.',
   local: 'Resolved locally via Gemma 2B on ROCm — low latency, no API cost.',
@@ -74,14 +81,14 @@ export default function RoutingCard({
   latencyMs,
 }: RoutingCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const meta = routeMeta[path];
+  const meta = routeMeta[path] ?? fallbackMeta;
 
   return (
-    <div className="bg-muted/60 border border-border/30 rounded-xl overflow-hidden transition-all duration-200">
+    <div className="bg-muted/60 border border-border/30 rounded-xl overflow-hidden transition-all duration-200 shadow-card">
       {/* Summary row — always visible, clickable to toggle */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-muted/80 transition-colors duration-150"
+        className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs cursor-pointer hover:bg-muted/80 transition-colors duration-150 active:scale-[0.98]"
         aria-expanded={expanded}
         aria-controls="routing-card-detail"
       >
@@ -137,7 +144,7 @@ export default function RoutingCard({
 
             {/* Route description */}
             <p className="text-[11px] text-foreground/40 leading-relaxed">
-              {routeDescriptions[path]}
+              {routeDescriptions[path] ?? 'Routing decision logged.'}
             </p>
           </div>
         </div>
