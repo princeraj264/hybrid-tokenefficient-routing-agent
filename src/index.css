@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-heading: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --color-primary: oklch(0.2077 0.0398 265.75);
+  --color-on-primary: oklch(1.0 0 0);
+  --color-secondary: oklch(0.2795 0.0368 260.03);
+  --color-accent: oklch(0.7227 0.192 149.58);
+  --color-background: oklch(0.1288 0.0406 264.7);
+  --color-foreground: oklch(0.9842 0.0034 247.86);
+  --color-muted: oklch(0.2396 0.0332 273.5);
+  --color-border: oklch(0.3717 0.0392 257.29);
+  --color-destructive: oklch(0.6368 0.2078 25.33);
+  --color-ring: oklch(0.2077 0.0398 265.75);
+  --color-cache: oklch(0.7227 0.192 149.58);
+  --color-local: oklch(0.7698 0.1493 73.66);
+  --color-remote: oklch(0.6368 0.2078 25.33);
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Scrollbar styling for dark theme */
+.scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollable::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+.scrollable::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0.04 257.29);
+}
+
+/* Animations */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.2s ease-out;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in-up,
+  .animate-fade-in,
+  .animate-slide-in-right {
+    animation: none;
+  }
+}
