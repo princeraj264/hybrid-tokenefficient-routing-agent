@@ -59,25 +59,6 @@ flowchart TD
 
 ---
 
-## Screenshots
-
-![Welcome / Empty State](docs/assets/screenshots/welcome-state.png)
-*The initial app view with the empty chat interface, showing the placeholder message that explains the three routing tiers and invites the user to type their first query.*
-
-![Cache-Hit Routing Card](docs/assets/screenshots/cache-hit.png)
-*A query answered instantly from the in-memory semantic cache. The message bubble shows a green 🟢 badge, zero tokens used, near-zero latency, and a full-height confidence bar.*
-
-![Local Routing Card](docs/assets/screenshots/local-routing.png)
-*A query answered by the local Gemma 2B model via `llama-cpp-python`. The message bubble shows an amber 🟡 badge, token count from local inference, latency, and a confidence bar reflecting the log-probability score.*
-
-![Remote Routing Card](docs/assets/screenshots/remote-routing.png)
-*A query escalated to Fireworks AI (Qwen 3.7 Plus). The message bubble shows a red 🔴 badge, higher token count and latency, and a confidence note indicating remote fallback.*
-
-![Session Summary Sidebar](docs/assets/screenshots/session-summary.png)
-*The side panel showing aggregate stats for the current session: total queries, cache hit rate, local resolution rate, tokens saved, and estimated cost savings vs. an always-remote baseline.*
-
----
-
 ## Cache & Confidence Scoring
 
 ### In-Memory Semantic Cache
