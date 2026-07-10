@@ -178,23 +178,8 @@ Run the full system (frontend + task-runner agent) with a single command.
 
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2
 - A [Fireworks AI](https://fireworks.ai) API key
-- The Gemma 2B GGUF model file (~1.7 GB)
 
-### 1. Download the local model
-
-Place the Gemma 2B `.gguf` file in a `./models/` folder at the project root:
-
-```bash
-mkdir -p models
-# Download gemma-2-2b-it-q4_k_m.gguf and place it in ./models/
-# The agent expects it at /models/gemma-2b-it-Q4_K_M.gguf inside the container.
-# You can symlink or rename it to match:
-ln -s models/gemma-2-2b-it-q4_k_m.gguf models/gemma-2b-it-Q4_K_M.gguf
-```
-
-> The model is **not** included in the Docker image or git repo due to its size. Docker mounts `./models/` read-only into the container at runtime.
-
-### 2. Set environment variables
+### 1. Set environment variables
 
 ```bash
 export FIREWORKS_API_KEY=fw_your_key_here           # required
@@ -211,7 +196,7 @@ Create `./input/tasks.json` with your tasks:
 ]
 ```
 
-### 3. Run
+### 2. Run
 
 ```bash
 docker compose up
@@ -226,7 +211,7 @@ The agent runs once and exits. To re-run on updated tasks:
 docker compose run --rm agent
 ```
 
-### 4. Run the frontend standalone (no Docker)
+### 3. Run the frontend standalone (no Docker)
 
 ```bash
 npm install
@@ -279,7 +264,7 @@ npm run build      # output → dist/
 The following metrics are collected over a diverse task set spanning factual QA, math, sentiment analysis, summarisation, NER, code debugging, logic puzzles, and code generation.
 
 | Metric | Value | Notes |
-|--------|-------|-------|
+|--------|-------|--------|
 | 🟢 **Cache hit rate** | — % | Queries answered instantly from in-memory cache |
 | 🟡 **Local resolution rate** | — % | Queries answered by local Gemma 2B (confidence ≥ threshold) |
 | 🔴 **Remote escalation rate** | — % | Queries forwarded to Fireworks Qwen 3.7 Plus |

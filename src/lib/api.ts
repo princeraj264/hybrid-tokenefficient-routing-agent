@@ -1,8 +1,5 @@
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-/** Every request to the ngrok tunnel must include this header to skip the warning page. */
-const NGROK_HEADERS = { 'ngrok-skip-browser-warning': 'true' };
-
 export interface QueryResponse {
   content: string;
   path: 'cache' | 'local' | 'remote';
@@ -25,7 +22,6 @@ export async function queryAgent(text: string): Promise<QueryResponse> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...NGROK_HEADERS,
     },
     body: JSON.stringify({ query: text }),
     // No signal / timeout — queries can legitimately take 2+ minutes
@@ -51,9 +47,7 @@ export async function queryAgent(text: string): Promise<QueryResponse> {
 
 /** Check whether the backend is reachable. */
 export async function checkHealth(): Promise<HealthResponse> {
-  const res = await fetch(`${BASE_URL}/health`, {
-    headers: NGROK_HEADERS,
-  });
+  const res = await fetch(`${BASE_URL}/health`);
 
   if (!res.ok) {
     throw new Error(`Health check failed: ${res.status}`);

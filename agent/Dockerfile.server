@@ -1,5 +1,5 @@
 # =============================================================================
-# Hybrid Token-Efficient Routing Agent — Task Runner Dockerfile
+# Hybrid Token-Efficient Routing Agent — Backend API Server (FastAPI + Uvicorn)
 # Target: linux/amd64
 # =============================================================================
 # Build stage: compile llama-cpp-python, install dependencies, download Gemma model
@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # time by setting CMAKE_ARGS="-DLLAMA_HIPBLAS=ON" when deploying to AMD Instinct)
 RUN pip install --no-cache-dir \
     llama-cpp-python \
+    fastapi \
+    uvicorn[standard] \
     requests \
     numpy
 
@@ -40,8 +42,11 @@ RUN addgroup --system --gid 1001 app && \
     adduser --system --uid 1001 --ingroup app app
 
 COPY --chown=app:app task_runner.py /app/task_runner.py
+COPY --chown=app:app api_server.py /app/api_server.py
 
 WORKDIR /app
 USER app
 
-ENTRYPOINT ["python", "task_runner.py"]
+EXPOSE 8000
+
+CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]

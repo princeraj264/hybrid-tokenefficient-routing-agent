@@ -31,7 +31,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+      - VITE_API_URL=${VITE_API_URL:-http://backend:8000}
     volumes:
       # Mount source so Vite can hot-reload
       - ./src:/app/src
@@ -40,6 +40,24 @@ services:
       - ./vite.config.ts:/app/vite.config.ts
       - ./package.json:/app/package.json
       - ./tsconfig.json:/app/tsconfig.json
+    depends_on:
+      - backend
+
+  # ---------------------------------------------------------------------------
+  # Python FastAPI backend server (cache → local Gemma → remote Fireworks)
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile.server
+    platform: linux/amd64
+    ports:
+      - "8000:8000"
+    environment:
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:?FIREWORKS_API_KEY is required}
+      - ALLOWED_MODELS=${ALLOWED_MODELS:-accounts/fireworks/models/qwen3.7-plus}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.75}
+      - GEMMA_MODEL_PATH=${GEMMA_MODEL_PATH:-/models/gemma-2b-it-Q4_K_M.gguf}
 
   # ---------------------------------------------------------------------------
   # Python task-runner agent (batch processor, not a server)
@@ -60,5 +78,3 @@ services:
       # Mount tasks input and results output from the host
       - ./input:/input
       - ./output:/output
-      # Mount the model file (if available on the host)
-      - ./models:/models:ro
