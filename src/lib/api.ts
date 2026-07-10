@@ -1,4 +1,4 @@
-const BASE_URL = 'https://wooing-crook-aerospace.ngrok-free.dev';
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 /** Every request to the ngrok tunnel must include this header to skip the warning page. */
 const NGROK_HEADERS = { 'ngrok-skip-browser-warning': 'true' };

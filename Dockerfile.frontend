@@ -1,0 +1,21 @@
+# =============================================================================
+# Hybrid Token-Efficient Routing Agent — Frontend (React + Vite)
+# =============================================================================
+# Uses Node 20 Alpine for a small image. Runs the Vite dev server bound to
+# 0.0.0.0 so it's reachable from within the Docker network.
+# =============================================================================
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies first (layer caching)
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Copy the rest of the source
+COPY . .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

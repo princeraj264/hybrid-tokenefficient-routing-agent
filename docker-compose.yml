@@ -1,0 +1,64 @@
+# =============================================================================
+# Hybrid Token-Efficient Routing Agent
+# docker compose up   — starts both the React frontend and the task-runner agent
+# =============================================================================
+# Usage:
+#   VITE_API_URL=http://backend:8080 docker compose up
+#
+# The frontend is exposed on host port 5173 (Vite dev server).
+# The task-runner reads tasks from ./input/tasks.json and writes results to
+# ./output/results.json on the host (both directories are created automatically).
+#
+# Required environment variables for the agent:
+#   FIREWORKS_API_KEY      — Fireworks AI API key
+#   ALLOWED_MODELS         — comma-separated, cheapest-first (or single model)
+#
+# Optional agent environment variables:
+#   CONFIDENCE_THRESHOLD   — default 0.75
+#   GEMMA_MODEL_PATH       — default /models/gemma-2b-it-Q4_K_M.gguf
+#   TASKS_INPUT_PATH       — default /input/tasks.json
+#   RESULTS_OUTPUT_PATH    — default /output/results.json
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # React + Vite frontend
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+    volumes:
+      # Mount source so Vite can hot-reload
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./index.html:/app/index.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./package.json:/app/package.json
+      - ./tsconfig.json:/app/tsconfig.json
+
+  # ---------------------------------------------------------------------------
+  # Python task-runner agent (batch processor, not a server)
+  # ---------------------------------------------------------------------------
+  agent:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    environment:
+      - FIREWORKS_API_KEY=${FIREWORKS_API_KEY:?FIREWORKS_API_KEY is required}
+      - ALLOWED_MODELS=${ALLOWED_MODELS:-accounts/fireworks/models/gemma-2b}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.75}
+      - GEMMA_MODEL_PATH=${GEMMA_MODEL_PATH:-/models/gemma-2b-it-Q4_K_M.gguf}
+      - TASKS_INPUT_PATH=${TASKS_INPUT_PATH:-/input/tasks.json}
+      - RESULTS_OUTPUT_PATH=${RESULTS_OUTPUT_PATH:-/output/results.json}
+    volumes:
+      # Mount tasks input and results output from the host
+      - ./input:/input
+      - ./output:/output
+      # Mount the model file (if available on the host)
+      - ./models:/models:ro
