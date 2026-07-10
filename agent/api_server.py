@@ -25,6 +25,7 @@ import sys
 import time
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 # Reuse the exact same classes from the batch task runner
@@ -48,6 +49,14 @@ app = FastAPI(
     title="Hybrid Routing Agent",
     version="1.0.0",
     description="Three-tier query router: cache → local Gemma 2B → remote Fireworks AI",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Initialise shared state once at import time.
