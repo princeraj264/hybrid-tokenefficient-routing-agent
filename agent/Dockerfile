@@ -45,6 +45,7 @@ RUN addgroup --system --gid 1001 app && \
     adduser --system --uid 1001 --ingroup app app
 
 COPY --chown=app:app task_runner.py /app/task_runner.py
+COPY --chown=app:app solvers.py /app/solvers.py
 
 WORKDIR /app
 USER app

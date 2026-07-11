@@ -184,7 +184,7 @@ Run the full system (frontend + task-runner agent) with a single command.
 ```bash
 export FIREWORKS_API_KEY=fw_your_key_here           # required
 export ALLOWED_MODELS=accounts/fireworks/models/qwen3.7-plus  # cheapest-first
-export VITE_API_URL=http://backend:8000             # optional, for custom backends
+export VITE_API_URL=http://frontend:8000             # optional, for custom backends
 ```
 
 Create `./input/tasks.json` with your tasks:
@@ -354,13 +354,11 @@ The remote tier is currently hardcoded to Qwen 3.7 Plus. A natural expansion is 
 
 This would let the router escalate in two steps instead of one — the economy tier handles moderate uncertainty, and only truly novel or ambiguous queries touch the most expensive model.
 
-### Multi-Tier Remote Routing
+### API Server Mode
 
-`RemoteModel` currently calls a single hardcoded Fireworks model (the first entry in `ALLOWED_MODELS`). A natural next step is genuine cost-aware selection across multiple allowed models — trying the cheapest first and escalating within the remote tier itself, not just between local and remote.
+The agent currently runs as a batch processor. Wrapping it in a lightweight web server (e.g., FastAPI) would allow it to accept queries at runtime from the frontend or other services, enabling real-time interactive use without the batch round-trip.
 
-### Persistent / Shared Cache
-
-The in-memory cache resets on every container restart and isn't shared between the batch runner and the API server processes. Backing it with Redis or SQLite would let cache hits persist across runs and be shared across both entry points.
+---
 
 ## License
 
