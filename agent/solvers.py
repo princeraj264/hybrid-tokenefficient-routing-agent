@@ -334,8 +334,14 @@ _HAS_BUG_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 _HAS_CODE_GEN_KEYWORDS = re.compile(
-    r"\b(write a function|write a program|write a script|write code|"
-    r"implement a|create a function|generate code|produce code)\b",
+    r"\b("
+    r"write\s+an?\s+(?:\w+\s+)?(?:function|program|script|method|class)|"
+    r"write\s+code|"
+    r"implement\s+an?\s+(?:\w+\s+)?(?:function|program|method|class)|"
+    r"create\s+an?\s+(?:\w+\s+)?function|"
+    r"generate\s+code|"
+    r"produce\s+code"
+    r")\b",
     re.IGNORECASE,
 )
 _HAS_MATH_SIGNALS = re.compile(
@@ -351,6 +357,12 @@ _HAS_MATH_SIGNALS = re.compile(
     r"|(?:\bmod\b|\bmodulo\b|\bremainder\b)"  # modulo
     r"|(?:\b\w+\s*=\s*\w+\s*[+\-*/%])"    # variable assignment with ops
     r"|(?:\bfind\s+the\s+(?:value|sum|difference|product|quotient|average))\b",
+    re.IGNORECASE,
+)
+_HAS_MATH_WORDPROBLEM_SIGNALS = re.compile(
+    r"\d+.*\bhow\s+(?:far|long|fast|much|many)\b"       # digits before "how far/long/fast/much/many"
+    r"|\bhow\s+(?:far|long|fast|much|many)\b.*\d+"      # "how far/long..." then digits
+    r"|\bper\s+(?:hour|minute|second|day)\b",           # "per hour/minute/second/day"
     re.IGNORECASE,
 )
 _HAS_NER_SIGNALS = re.compile(
@@ -431,8 +443,8 @@ def classify_task(prompt: str) -> str:
     if _HAS_CODE_GEN_KEYWORDS.search(text_lower):
         return "code_generation"
 
-    # 3. math — arithmetic expressions, equation solving, percent
-    if _HAS_MATH_SIGNALS.search(text_lower):
+    # 3. math — arithmetic expressions, equation solving, percent, word problems
+    if _HAS_MATH_SIGNALS.search(text_lower) or _HAS_MATH_WORDPROBLEM_SIGNALS.search(text_lower):
         return "math"
 
     # 4. ner — named entity recognition/extraction
@@ -532,6 +544,10 @@ def _test_classify_task() -> None:
             "What is the capital of France?",
             "factual_qa",
         ),
+        (
+            "How many moons does Jupiter have?",
+            "factual_qa",
+        ),
 
         # math
         (
@@ -548,6 +564,18 @@ def _test_classify_task() -> None:
         ),
         (
             "A train travels 60 miles per hour for 2.5 hours. How far does it go?",
+            "math",
+        ),
+        (
+            "A car travels at 50 kilometers per hour for 3 hours. How long is the journey?",
+            "math",
+        ),
+        (
+            "If 3 apples cost $2.40, how much does one apple cost?",
+            "math",
+        ),
+        (
+            "A runner completes 5 laps of a 400-meter track. How many meters did she run?",
             "math",
         ),
 
@@ -608,6 +636,22 @@ def _test_classify_task() -> None:
         ),
         (
             "Implement a function that checks if a string is a palindrome.",
+            "code_generation",
+        ),
+        (
+            "Write a Java program that sorts an array of integers.",
+            "code_generation",
+        ),
+        (
+            "Implement a recursive function to compute the Fibonacci sequence.",
+            "code_generation",
+        ),
+        (
+            "Write a Python script to scrape all product prices from a website.",
+            "code_generation",
+        ),
+        (
+            "Create a class that represents a bank account with deposit and withdraw methods.",
             "code_generation",
         ),
 
