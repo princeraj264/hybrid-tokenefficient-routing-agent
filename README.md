@@ -184,7 +184,7 @@ Run the full system (frontend + task-runner agent) with a single command.
 ```bash
 export FIREWORKS_API_KEY=fw_your_key_here           # required
 export ALLOWED_MODELS=accounts/fireworks/models/qwen3.7-plus  # cheapest-first
-export VITE_API_URL=http://backtend:8000             # optional, for custom backends
+export VITE_API_URL=http://backend:8000             # optional, for custom backends
 ```
 
 Create `./input/tasks.json` with your tasks:
