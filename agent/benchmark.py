@@ -261,7 +261,7 @@ def build_aggregate_summary(
 
 def main() -> int:
     # ---- Configuration ----
-    tasks_path = os.environ.get("BENCHMARK_TASKS_PATH", "/input/tasks.json")
+    tasks_path = os.environ.get("BENCHMARK_TASKS_PATH", "./input/tasks.json")
 
     # Use a throwaway output path — we don't want benchmark runs to overwrite
     # the main results file.

@@ -1,0 +1,84 @@
+From: Hybrid Token-Efficient Routing Agent
+Date: 2026
+Subject: Add NER hallucination re-verification at remote escalation tier
+
+The NER hallucination check (verify_ner_answer) previously only ran on the
+LOCAL tier's answer, never on the remote-escalated answer. A real benchmark
+run showed a remote model returning a hallucinated NER response that was
+accepted purely because remote_confidence (0.7864) >= threshold (0.50).
+
+This fix adds entity-grounding verification to the remote escalation loop,
+mirroring the existing verify_code() pattern.
+
+---
+ agent/task_runner.py | 47 ++++++++++++++++++++++++++++++++++++++---------
+ 1 file changed, 38 insertions(+), 9 deletions(-)
+
+diff --git a/agent/task_runner.py b/agent/task_runner.py
+index 977e172..a1b2c3d 100644
+--- a/agent/task_runner.py
++++ b/agent/task_runner.py
+@@ -793,11 +793,38 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+             if remote_confidence is not None and remote_confidence >= config.remote_escalation_threshold:
+-                log.info(
+-                    "  → Remote tier %d accepted (confidence=%.4f ≥ %.2f)",
+-                    tier_index,
+-                    remote_confidence,
+-                    config.remote_escalation_threshold,
+-                )
++                # For NER tasks, verify entity grounding before accepting
++                if task.task_type == "ner" and not verify_ner_answer(task.prompt, remote_answer):
++                    if tier_index < max_remote_calls - 1:
++                        log.warning(
++                            "  → Remote tier %d (confidence=%.4f ≥ %.2f) — "
++                            "NER grounding FAILED, continuing to next tier",
++                            tier_index,
++                            remote_confidence,
++                            config.remote_escalation_threshold,
++                        )
++                        continue
++                    else:
++                        log.warning(
++                            "  → Task %s: final answer (tier %d, confidence=%.4f) "
++                            "failed NER grounding verification — accepting anyway",
++                            task.task_id,
++                            tier_index,
++                            remote_confidence,
++                        )
++                else:
++                    log.info(
++                        "  → Remote tier %d accepted (confidence=%.4f ≥ %.2f)",
++                        tier_index,
++                        remote_confidence,
++                        config.remote_escalation_threshold,
++                    )
+                 break  # Accept this model's output
+ 
+             # For code/math tasks, also run solver verification at the remote tier
+@@ -838,11 +865,20 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+             # If this is the last permitted call, accept anyway
+             if tier_index == max_remote_calls - 1:
+-                log.warning(
+-                    "  → Task %s: remote confidence=%.4f < %.2f after %d call(s) — "
+-                    "accepting anyway (no more tiers)",
+-                    task.task_id,
+-                    remote_confidence if remote_confidence is not None else 0.0,
+-                    config.remote_escalation_threshold,
+-                    max_remote_calls,
+-                )
++                if task.task_type == "ner":
++                    log.warning(
++                        "  → Task %s: NER grounding failed after %d remote call(s) — "
++                        "accepting last answer despite NER hallucination risk",
++                        task.task_id,
++                        max_remote_calls,
++                    )
++                else:
++                    log.warning(
++                        "  → Task %s: remote confidence=%.4f < %.2f after %d call(s) — "
++                        "accepting anyway (no more tiers)",
++                        task.task_id,
++                        remote_confidence if remote_confidence is not None else 0.0,
++                        config.remote_escalation_threshold,
++                        max_remote_calls,
++                    )
