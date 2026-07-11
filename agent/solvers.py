@@ -333,15 +333,18 @@ _HAS_BUG_KEYWORDS = re.compile(
     r"incorrect|doesn't work|isn't working|faulty)\b",
     re.IGNORECASE,
 )
+_CODE_NOUNS = (
+    r"function|program|script|method|class|decorator|generator|iterator"
+)
 _HAS_CODE_GEN_KEYWORDS = re.compile(
-    r"\b("
-    r"write\s+an?\s+(?:\w+\s+)?(?:function|program|script|method|class)|"
-    r"write\s+code|"
-    r"implement\s+an?\s+(?:\w+\s+)?(?:function|program|method|class)|"
-    r"create\s+an?\s+(?:\w+\s+)?function|"
-    r"generate\s+code|"
-    r"produce\s+code"
-    r")\b",
+    rf"\b("
+    rf"write\s+an?\s+(?:\w+\s+)?(?:{_CODE_NOUNS})|"
+    rf"write\s+code|"
+    rf"implement\s+an?\s+(?:\w+\s+)?(?:{_CODE_NOUNS})|"
+    rf"create\s+an?\s+(?:\w+\s+)?(?:{_CODE_NOUNS})|"
+    rf"generate\s+code|"
+    rf"produce\s+code"
+    rf")\b",
     re.IGNORECASE,
 )
 _HAS_MATH_SIGNALS = re.compile(
@@ -548,6 +551,10 @@ def _test_classify_task() -> None:
             "How many moons does Jupiter have?",
             "factual_qa",
         ),
+        (
+            "What class of animal is a shark?",
+            "factual_qa",
+        ),
 
         # math
         (
@@ -654,8 +661,24 @@ def _test_classify_task() -> None:
             "Create a class that represents a bank account with deposit and withdraw methods.",
             "code_generation",
         ),
+        (
+            "Create a method that validates email addresses.",
+            "code_generation",
+        ),
+        (
+            "Write a Python decorator that logs all function calls.",
+            "code_generation",
+        ),
+        (
+            "Write a class that manages a pool of database connections.",
+            "code_generation",
+        ),
+        (
+            "Implement an iterator that yields Fibonacci numbers.",
+            "code_generation",
+        ),
 
-        # Edge case: short no-signal prompt → should fall back to factual_qa
+        # Edge cases: short no-signal prompt → should fall back to factual_qa
         (
             "Hello world",
             "factual_qa",
