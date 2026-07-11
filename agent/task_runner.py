@@ -380,16 +380,27 @@ class RemoteModel:
 # ---------------------------------------------------------------------------
 
 def load_tasks(path: str) -> list[Task]:
-    """Load and validate the task list from a JSON file."""
+    """Load and validate the task list from a JSON file.
+
+    Returns an empty list for a legitimate empty JSON array (``[]``).
+    Raises an exception if the file doesn't exist, isn't valid JSON, or
+    isn't a JSON array — the caller should propagate this to ``main()``
+    so it logs the error and exits with code 1.
+    """
     p = Path(path)
     if not p.is_file():
         log.error("Tasks file not found: %s", path)
-        return []
+        raise FileNotFoundError(f"Tasks file not found: {path}")
 
-    raw = json.loads(p.read_text("utf-8"))
+    try:
+        raw = json.loads(p.read_text("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        log.error("Invalid content in tasks file %s: %s", path, e)
+        raise ValueError(f"Invalid content in tasks file {path}: {e}") from e
+
     if not isinstance(raw, list):
         log.error("Expected a JSON array at %s, got %s", path, type(raw).__name__)
-        return []
+        raise TypeError(f"Expected a JSON array at {path}, got {type(raw).__name__}")
 
     tasks: list[Task] = []
     for i, item in enumerate(raw):
@@ -799,10 +810,13 @@ def process_tasks(config: Config) -> int:
     """
     results, tasks = run_pipeline(config)
 
+    # Always write results so the output file exists on any exit-code-0 path
+    # (including a legitimate empty task list).  Never let load_tasks failure
+    # result in a silent "no file written" on exit code 0.
+    write_results(results, config.results_output_path, strict=config.strict_output_schema)
+
     if not results:
         return 0
-
-    write_results(results, config.results_output_path, strict=config.strict_output_schema)
 
     # Print a brief summary to stderr
     paths = [r.path for r in results]

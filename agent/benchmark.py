@@ -184,7 +184,11 @@ def main() -> int:
     log.info("  FIREWORKS_API_KEY    = %s", "***" if config.fireworks_api_key else "(not set)")
 
     # ---- Run the pipeline ----
-    results, tasks = run_pipeline(config)
+    try:
+        results, tasks = run_pipeline(config)
+    except (FileNotFoundError, ValueError, TypeError) as e:
+        log.error("Pipeline failed — %s", e)
+        return 1
 
     if not results:
         log.error("No results produced — check input file and model config.")
