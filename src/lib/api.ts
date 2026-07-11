@@ -17,13 +17,16 @@ export interface HealthResponse {
  * Send a query to the hybrid routing agent.
  * No timeout is set — remote-escalated queries can take 60–120 seconds.
  */
-export async function queryAgent(text: string): Promise<QueryResponse> {
+export async function queryAgent(
+  text: string,
+  taskType?: string,
+): Promise<QueryResponse> {
   const res = await fetch(`${BASE_URL}/query`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ query: text }),
+    body: JSON.stringify({ query: text, task_type: taskType ?? 'general' }),
     // No signal / timeout — queries can legitimately take 2+ minutes
   });
 

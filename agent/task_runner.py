@@ -32,6 +32,14 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any
 
+from solvers import (
+    try_solve_math,
+    extract_code,
+    extract_test_cases,
+    verify_code,
+    verify_ner_answer,
+)
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -388,16 +396,19 @@ def write_results(results: list[TaskResult], path: str) -> None:
     log.info("Wrote %d results to %s", len(results), path)
 
 
-def process_tasks(config: Config) -> int:
+def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
     """
     Run the full routing pipeline over all input tasks.
 
-    Returns exit code (0 = success, 1 = error).
+    Returns (results, tasks) so callers can inspect path distribution,
+    token usage, and per-type breakdown without modifying the pipeline.
+
+    This is the core that both process_tasks() and benchmark.py reuse.
     """
     tasks = load_tasks(config.tasks_input_path)
     if not tasks:
         log.info("No tasks to process.")
-        return 0
+        return [], []
 
     cache = TaskCache()
     local_model = LocalModel()
@@ -423,36 +434,148 @@ def process_tasks(config: Config) -> int:
             )
             continue
 
-        # ---- Tier 2: Local inference ----
-        t_start = time.perf_counter()
-        answer, confidence, tokens_used = local_model.generate(task.prompt)
-        latency = (time.perf_counter() - t_start) * 1000
+        # ---- Tier 1b: Math solver (deterministic, zero-cost) ----
+        if task.task_type == "math":
+            math_answer = try_solve_math(task.prompt)
+            if math_answer is not None:
+                log.info("  → Math solved deterministically (0 tokens)")
+                cache.put(task.prompt, math_answer, 0)
+                results.append(
+                    TaskResult(
+                        task_id=task.task_id,
+                        answer=math_answer,
+                        path="local",
+                        tokens_used=0,
+                        confidence=1.0,
+                    )
+                )
+                continue
+            # If try_solve_math returned None, fall through to local inference
 
-        if confidence >= config.confidence_threshold:
+        # ---- Tier 2: Code verification pipeline ----
+        if task.task_type in ("code_debugging", "code_generation"):
+            t_start = time.perf_counter()
+            answer, confidence, tokens_used = local_model.generate(task.prompt)
+            latency = (time.perf_counter() - t_start) * 1000
+
+            code = extract_code(answer)
+            test_cases = extract_test_cases(task.prompt)
+
+            err = ""
+            if code is not None:
+                verified, err = verify_code(code, test_cases=test_cases)
+                if verified:
+                    log.info(
+                        "  → Code verified locally (test cases: %d)",
+                        len(test_cases),
+                    )
+                    cache.put(task.prompt, answer, tokens_used)
+                    results.append(
+                        TaskResult(
+                            task_id=task.task_id,
+                            answer=answer,
+                            path="local",
+                            tokens_used=tokens_used,
+                            confidence=round(confidence, 4),
+                            latency_ms=round(latency, 1),
+                        )
+                    )
+                    continue
+            else:
+                err = "No code block found in local output"
+
+            # Local code missing or failed verification — escalate to remote
             log.info(
-                "  → Local (confidence=%.4f ≥ %.2f) — accepted",
-                confidence,
-                config.confidence_threshold,
+                "  → Local code %s — escalating to remote",
+                "missing" if code is None else "failed verification",
             )
-            cache.put(task.prompt, answer, tokens_used)
+            repair_prompt = (
+                task.prompt
+                + "\n\n[Note: the previous attempt failed.\nError: "
+                + err
+                + "\nPlease fix the code and respond with a corrected ```python block.]"
+            )
+            remote_answer, model_name, remote_tokens = remote_model.generate(
+                repair_prompt
+            )
+
+            # Verify the remote answer too (one escalation max)
+            remote_code = extract_code(remote_answer)
+            if remote_code is not None:
+                remote_verified, remote_err = verify_code(
+                    remote_code, test_cases=test_cases
+                )
+                if not remote_verified:
+                    log.warning(
+                        "  → Remote code also failed verification for task %s: %s",
+                        task.task_id,
+                        remote_err,
+                    )
+            else:
+                log.warning(
+                    "  → Remote answer contains no code block for task %s",
+                    task.task_id,
+                )
+
+            cache.put(task.prompt, remote_answer, remote_tokens)
             results.append(
                 TaskResult(
                     task_id=task.task_id,
-                    answer=answer,
-                    path="local",
-                    tokens_used=tokens_used,
+                    answer=remote_answer,
+                    path="remote",
+                    model_used=model_name,
+                    tokens_used=remote_tokens,
                     confidence=round(confidence, 4),
                     latency_ms=round(latency, 1),
                 )
             )
             continue
 
-        # ---- Tier 3: Remote escalation ----
-        log.info(
-            "  → Local confidence=%.4f < %.2f — escalating to remote",
-            confidence,
-            config.confidence_threshold,
-        )
+        # ---- Tier 3: Local inference (confidence-based) ----
+        t_start = time.perf_counter()
+        answer, confidence, tokens_used = local_model.generate(task.prompt)
+        latency = (time.perf_counter() - t_start) * 1000
+
+        if confidence >= config.confidence_threshold:
+            # For NER tasks, additionally verify no blatant hallucinations
+            if task.task_type == "ner" and not verify_ner_answer(task.prompt, answer):
+                log.info(
+                    "  → Local (confidence=%.4f ≥ %.2f) — NER hallucination "
+                    "detected, escalating to remote",
+                    confidence,
+                    config.confidence_threshold,
+                )
+                # Fall through to Tier 4 (remote escalation) below
+            else:
+                log.info(
+                    "  → Local (confidence=%.4f ≥ %.2f) — accepted",
+                    confidence,
+                    config.confidence_threshold,
+                )
+                cache.put(task.prompt, answer, tokens_used)
+                results.append(
+                    TaskResult(
+                        task_id=task.task_id,
+                        answer=answer,
+                        path="local",
+                        tokens_used=tokens_used,
+                        confidence=round(confidence, 4),
+                        latency_ms=round(latency, 1),
+                    )
+                )
+                continue
+
+        # ---- Tier 4: Remote escalation ----
+        if confidence < config.confidence_threshold:
+            log.info(
+                "  → Local confidence=%.4f < %.2f — escalating to remote",
+                confidence,
+                config.confidence_threshold,
+            )
+        else:
+            log.info(
+                "  → NER hallucination fallthrough — escalating to remote",
+            )
         remote_answer, model_name, remote_tokens = remote_model.generate(task.prompt)
 
         # Cache the remote answer too so repeat queries hit cache
@@ -469,6 +592,23 @@ def process_tasks(config: Config) -> int:
                 latency_ms=round(latency, 1),
             )
         )
+
+    return results, tasks
+
+
+def process_tasks(config: Config) -> int:
+    """
+    Run the full routing pipeline over all input tasks.
+
+    Thin wrapper around run_pipeline() that persists results and prints
+    a summary to stderr.
+
+    Returns exit code (0 = success, 1 = error).
+    """
+    results, tasks = run_pipeline(config)
+
+    if not results:
+        return 0
 
     write_results(results, config.results_output_path)
 
