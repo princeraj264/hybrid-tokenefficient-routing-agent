@@ -38,6 +38,8 @@ from solvers import (
     extract_test_cases,
     verify_code,
     verify_ner_answer,
+    classify_task,
+    VALID_TASK_TYPES,
 )
 
 # ---------------------------------------------------------------------------
@@ -100,6 +102,10 @@ class Config:
     allowed_models: list[str] = field(default_factory=list)
     remote_escalation_threshold: float = field(
         default_factory=lambda: float(os.environ.get("REMOTE_ESCALATION_THRESHOLD", "0.5"))
+    )
+    strict_output_schema: bool = field(
+        default_factory=lambda: os.environ.get("STRICT_OUTPUT_SCHEMA", "false").lower()
+        in ("1", "true", "yes")
     )
 
     def __post_init__(self) -> None:
@@ -385,23 +391,30 @@ def load_tasks(path: str) -> list[Task]:
         log.error("Expected a JSON array at %s, got %s", path, type(raw).__name__)
         return []
 
-    valid_types = {
-        "factual_qa", "math", "sentiment", "summarization",
-        "ner", "code_debugging", "logic", "code_generation",
-    }
-
     tasks: list[Task] = []
     for i, item in enumerate(raw):
         tid = item.get("task_id", f"task_{i}")
-        ttype = item.get("task_type", "unknown")
         prompt = item.get("prompt", "")
-
-        if ttype not in valid_types:
-            log.warning("Task %s: unknown task_type '%s'; proceeding anyway", tid, ttype)
 
         if not prompt.strip():
             log.warning("Task %s: empty prompt; skipping", tid)
             continue
+
+        # Use explicit task_type if valid, otherwise infer from prompt
+        ttype = item.get("task_type", None)
+        if ttype not in VALID_TASK_TYPES:
+            inferred = classify_task(prompt)
+            if ttype is not None and ttype not in VALID_TASK_TYPES:
+                log.info(
+                    "Task %s: unknown task_type %r from JSON — inferred %r from prompt",
+                    tid, ttype, inferred,
+                )
+            else:
+                log.info(
+                    "Task %s: no task_type in JSON — inferred %r from prompt",
+                    tid, inferred,
+                )
+            ttype = inferred
 
         tasks.append(Task(task_id=tid, task_type=ttype, prompt=prompt.strip()))
 
@@ -409,22 +422,30 @@ def load_tasks(path: str) -> list[Task]:
     return tasks
 
 
-def write_results(results: list[TaskResult], path: str) -> None:
-    """Write the results array to a JSON file, creating parent dirs if needed."""
+def write_results(results: list[TaskResult], path: str, strict: bool = False) -> None:
+    """Write the results array to a JSON file, creating parent dirs if needed.
+
+    When *strict* is True, each entry emits only task_id and answer (the
+    minimal AMD-hackathon-required schema). The default (strict=False) includes
+    all available fields (path, model_used, tokens_used, confidence, latency_ms).
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
     serializable = []
     for r in results:
-        d = {
-            "task_id": r.task_id,
-            "answer": r.answer,
-            "path": r.path,
-        }
-        if r.model_used is not None:
-            d["model_used"] = r.model_used
-        if r.tokens_used is not None:
-            d["tokens_used"] = r.tokens_used
+        if strict:
+            d: dict[str, object] = {"task_id": r.task_id, "answer": r.answer}
+        else:
+            d = {
+                "task_id": r.task_id,
+                "answer": r.answer,
+                "path": r.path,
+            }
+            if r.model_used is not None:
+                d["model_used"] = r.model_used
+            if r.tokens_used is not None:
+                d["tokens_used"] = r.tokens_used
         serializable.append(d)
 
     p.write_text(json.dumps(serializable, indent=2, ensure_ascii=False), "utf-8")
@@ -781,7 +802,7 @@ def process_tasks(config: Config) -> int:
     if not results:
         return 0
 
-    write_results(results, config.results_output_path)
+    write_results(results, config.results_output_path, strict=config.strict_output_schema)
 
     # Print a brief summary to stderr
     paths = [r.path for r in results]

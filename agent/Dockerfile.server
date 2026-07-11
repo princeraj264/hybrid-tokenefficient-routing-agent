@@ -4,36 +4,31 @@
 # =============================================================================
 # Build stage: compile llama-cpp-python, install dependencies, download Gemma model
 FROM python:3.11-slim AS builder
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     curl \
     coreutils \
     && rm -rf /var/lib/apt/lists/*
-# Install Python dependencies. llama-cpp-python is pulled from the project's
-# prebuilt CPU wheel index to avoid a from-source cmake/gcc compile (which can
-# take 30+ minutes and has been known to exhaust Docker Desktop's build VM).
-# If no matching prebuilt wheel exists for this platform, pip falls back to
-# building from source automatically — CMAKE_ARGS below still applies in
-# that case (ROCm BLAS can be enabled at build time by setting
-# CMAKE_ARGS="-DLLAMA_HIPBLAS=ON" when deploying to AMD Instinct).
+
+# Install Python dependencies (llama-cpp-python compiles against CPU-only BLAS
+# for maximum portability on linux/amd64; ROCm BLAS can be enabled at build
+# time by setting CMAKE_ARGS="-DLLAMA_HIPBLAS=ON" when deploying to AMD Instinct)
 RUN pip install --no-cache-dir \
     llama-cpp-python \
     fastapi \
     uvicorn[standard] \
     requests \
-    numpy \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+    numpy
+
 # Download Gemma 2B GGUF model from Hugging Face.
 # This file is ~1.7 GB; the image will be self-contained once built.
-# --retry/--retry-all-errors survive transient network drops on the long
-# download, and -C - resumes from where it left off instead of restarting
-# from zero if a retry is needed.
 # If this URL becomes unavailable, search Hugging Face for "gemma-2-2b-it-GGUF"
 # and update the URL accordingly.
 ARG EXPECTED_MODEL_SHA256=""
 RUN mkdir -p /models && \
-    curl -L --retry 5 --retry-delay 5 --retry-all-errors -C - -o /models/gemma-2b-it-Q4_K_M.gguf \
+    curl -L -o /models/gemma-2b-it-Q4_K_M.gguf \
     https://huggingface.co/lmstudio-community/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf && \
     SHA256=$(sha256sum /models/gemma-2b-it-Q4_K_M.gguf | cut -d' ' -f1) && \
     SIZE=$(stat -c%s /models/gemma-2b-it-Q4_K_M.gguf 2>/dev/null || stat -f%z /models/gemma-2b-it-Q4_K_M.gguf 2>/dev/null) && \
@@ -46,9 +41,11 @@ RUN mkdir -p /models && \
         echo "FATAL: Downloaded model file ($SIZE bytes) is smaller than 1.4 GB — corrupt or partial download."; \
         exit 1; \
     fi
+
 # =============================================================================
 # Runtime stage: minimal image with only the installed packages and model file
 FROM python:3.11-slim
+
 # Install libgomp1 for llama-cpp-python's OpenMP shared library,
 # plus coreutils (for stat(1)) and curl (for runtime model fallback fetch).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -56,16 +53,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     coreutils \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /models /models
+
 # Create non-root user
 RUN addgroup --system --gid 1001 app && \
     adduser --system --uid 1001 --ingroup app app
+
 COPY --chown=app:app task_runner.py /app/task_runner.py
 COPY --chown=app:app solvers.py /app/solvers.py
 COPY --chown=app:app api_server.py /app/api_server.py
+
 WORKDIR /app
 USER app
+
 EXPOSE 8000
+
 CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]
