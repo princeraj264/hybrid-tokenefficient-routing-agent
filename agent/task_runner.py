@@ -15,7 +15,7 @@ Usage:
     export CONFIDENCE_THRESHOLD=0.75
     export FIREWORKS_API_KEY=fw_...
     export FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
-    export ALLOWED_MODELS=accounts/fireworks/models/gemma-2b,accounts/fireworks/models/qwen3.5-plus
+    export ALLOWED_MODELS=accounts/fireworks/models/gemma-2-9b-it,accounts/fireworks/models/qwen3.7-plus
     python task_runner.py
 
 No server, no ports, no interactive input — runs once top-to-bottom and exits.
@@ -49,6 +49,9 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 log = logging.getLogger("task_runner")
+
+class LocalModelUnavailableError(RuntimeError):
+    """Raised when LocalModel.generate() is called without an available model file."""
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -95,6 +98,9 @@ class Config:
         )
     )
     allowed_models: list[str] = field(default_factory=list)
+    remote_escalation_threshold: float = field(
+        default_factory=lambda: float(os.environ.get("REMOTE_ESCALATION_THRESHOLD", "0.5"))
+    )
 
     def __post_init__(self) -> None:
         raw = os.environ.get("ALLOWED_MODELS", "")
@@ -107,6 +113,13 @@ class Config:
                 self.confidence_threshold,
             )
             self.confidence_threshold = 0.75
+
+        if self.remote_escalation_threshold < 0.0 or self.remote_escalation_threshold > 1.0:
+            log.warning(
+                "REMOTE_ESCALATION_THRESHOLD %.2f is outside [0, 1]; clamping to 0.5",
+                self.remote_escalation_threshold,
+            )
+            self.remote_escalation_threshold = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +162,14 @@ class LocalModel:
             or "/models/gemma-2b-it-Q4_K_M.gguf"
         )
 
+    @property
+    def is_available(self) -> bool:
+        """Check whether the model file exists on disk without loading the model."""
+        if self._model is not None:
+            return True
+        p = Path(self._model_path)
+        return p.is_file() and p.stat().st_size > 0
+
     def _load(self) -> None:
         if self._model is not None:
             return
@@ -188,11 +209,9 @@ class LocalModel:
         """
         self._load()
         if self._model is None:
-            log.error("No local model loaded; falling back semantics.")
-            return (
-                "[Local model unavailable — check GEMMA_MODEL_PATH]",
-                0.0,
-                0,
+            raise LocalModelUnavailableError(
+                f"Local model file '{self._model_path}' is not available. "
+                "Check is_available before calling generate()."
             )
 
         t0 = time.perf_counter()
@@ -260,36 +279,41 @@ class RemoteModel:
         self._config = config
 
     def generate(
-        self, prompt: str, max_tokens: int = 512
-    ) -> tuple[str, str, int]:
+        self, prompt: str, max_tokens: int = 512, model_index: int = 0
+    ) -> tuple[str, str, int, float | None]:
         """
-        Generate an answer via the Fireworks API.
+        Generate an answer via the Fireworks API using the model at the given index.
+
+        Requests logprobs so callers can compute per-tier confidence scores.
+        This allows the escalation chain (economy → premium) to decide
+        whether a cheap model's output is trustworthy.
 
         Returns:
-            (answer_text, model_name, tokens_used)
+            (answer_text, model_name, tokens_used, confidence_or_none)
+            confidence is None if logprobs were unavailable from the API.
         """
         if not self._config.fireworks_api_key:
             log.error("FIREWORKS_API_KEY is not set — remote escalation unavailable.")
-            return (
-                "[Remote model unavailable — no API key]",
-                "none",
-                0,
-            )
+            return ("[Remote model unavailable — no API key]", "none", 0, None)
 
         if not self._config.allowed_models:
             log.error("ALLOWED_MODELS is empty — remote escalation unavailable.")
-            return (
-                "[Remote model unavailable — no allowed models configured]",
-                "none",
-                0,
+            return ("[Remote model unavailable — no allowed models configured]", "none", 0, None)
+
+        if model_index >= len(self._config.allowed_models):
+            log.error(
+                "model_index %d out of range (allowed_models has %d entries)",
+                model_index,
+                len(self._config.allowed_models),
             )
+            return ("[Remote model unavailable — index out of range]", "none", 0, None)
 
         import requests
 
-        model = self._config.allowed_models[0]  # cheapest-first ordering
+        model = self._config.allowed_models[model_index]
         url = f"{self._config.fireworks_base_url.rstrip('/')}/chat/completions"
 
-        log.info("Escalating to remote model: %s", model)
+        log.info("Remote tier %d — model: %s", model_index, model)
 
         t0 = time.perf_counter()
         try:
@@ -304,6 +328,7 @@ class RemoteModel:
                     "messages": [{"role": "user", "content": prompt}],
                     "max_tokens": max_tokens,
                     "temperature": 0.0,
+                    "logprobs": True,  # request per-token logprobs for confidence scoring
                 },
                 timeout=120,
             )
@@ -316,22 +341,32 @@ class RemoteModel:
             usage = data.get("usage", {})
             tokens_used = usage.get("completion_tokens", 0)
 
+            # --- Extract logprobs-based confidence ---
+            confidence: float | None = None
+            logprobs_data = choice.get("logprobs")
+            if logprobs_data and "content" in logprobs_data:
+                token_logprobs = [
+                    entry["logprob"]
+                    for entry in logprobs_data["content"]
+                    if entry.get("logprob") is not None
+                ]
+                if token_logprobs:
+                    mean_lp = sum(token_logprobs) / len(token_logprobs)
+                    confidence = max(0.0, min(1.0, 2.71828 ** mean_lp))
+
             log.info(
-                "Remote model %s: %d tokens, latency=%.1fms",
+                "Remote model %s: %d tokens, confidence=%s, latency=%.1fms",
                 model,
                 tokens_used,
+                f"{confidence:.4f}" if confidence is not None else "N/A",
                 elapsed * 1000,
             )
 
-            return text, model, tokens_used
+            return text, model, tokens_used, confidence
 
         except Exception as exc:
             log.error("Fireworks API call failed: %s", exc)
-            return (
-                f"[Remote call failed: {exc}]",
-                model,
-                0,
-            )
+            return (f"[Remote call failed: {exc}]", model, 0, None)
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +447,15 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
 
     cache = TaskCache()
     local_model = LocalModel()
+    local_available = local_model.is_available
+    if not local_available:
+        log.warning("=" * 70)
+        log.warning(
+            "LOCAL MODEL UNAVAILABLE: '%s' not found or empty on disk. "
+            "All tasks will be routed directly to Fireworks (remote escalation).",
+            local_model._model_path,
+        )
+        log.warning("=" * 70)
     remote_model = RemoteModel(config)
 
     results: list[TaskResult] = []
@@ -454,9 +498,16 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
 
         # ---- Tier 2: Code verification pipeline ----
         if task.task_type in ("code_debugging", "code_generation"):
-            t_start = time.perf_counter()
-            answer, confidence, tokens_used = local_model.generate(task.prompt)
-            latency = (time.perf_counter() - t_start) * 1000
+            if not local_available:
+                log.info("  → Local model unavailable — escalating directly to remote")
+                answer = ""
+                confidence = 0.0
+                tokens_used = 0
+                latency = 0.0
+            else:
+                t_start = time.perf_counter()
+                answer, confidence, tokens_used = local_model.generate(task.prompt)
+                latency = (time.perf_counter() - t_start) * 1000
 
             code = extract_code(answer)
             test_cases = extract_test_cases(task.prompt)
@@ -495,27 +546,61 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                 + err
                 + "\nPlease fix the code and respond with a corrected ```python block.]"
             )
-            remote_answer, model_name, remote_tokens = remote_model.generate(
-                repair_prompt
-            )
 
-            # Verify the remote answer too (one escalation max)
-            remote_code = extract_code(remote_answer)
-            if remote_code is not None:
-                remote_verified, remote_err = verify_code(
-                    remote_code, test_cases=test_cases
+            # Try economy model first, then premium if verification fails
+            max_remote_calls = min(2, len(config.allowed_models))
+            remote_answer: str = ""
+            model_name: str = "none"
+            remote_tokens: int = 0
+            remote_confidence: float | None = None
+
+            for tier_index in range(max_remote_calls):
+                (
+                    remote_answer,
+                    model_name,
+                    remote_tokens,
+                    remote_confidence,
+                ) = remote_model.generate(repair_prompt, model_index=tier_index)
+                log.info(
+                    "  → Remote tier %d (%s): %d tokens",
+                    tier_index,
+                    model_name,
+                    remote_tokens,
                 )
-                if not remote_verified:
-                    log.warning(
-                        "  → Remote code also failed verification for task %s: %s",
-                        task.task_id,
-                        remote_err,
+
+                # Verify the remote answer
+                remote_code = extract_code(remote_answer)
+                if remote_code is not None:
+                    remote_verified, remote_err = verify_code(
+                        remote_code, test_cases=test_cases
                     )
-            else:
-                log.warning(
-                    "  → Remote answer contains no code block for task %s",
-                    task.task_id,
-                )
+                    if remote_verified:
+                        log.info(
+                            "  → Code verified at remote tier %d (test cases: %d)",
+                            tier_index,
+                            len(test_cases),
+                        )
+                        break  # Accept this tier's answer
+                    else:
+                        log.warning(
+                            "  → Remote tier %d code failed verification: %s",
+                            tier_index,
+                            remote_err,
+                        )
+                else:
+                    log.warning(
+                        "  → Remote tier %d answer contains no code block",
+                        tier_index,
+                    )
+
+                # If this was the last permitted call, accept anyway (one escalation max)
+                if tier_index == max_remote_calls - 1:
+                    log.warning(
+                        "  → Task %s could not be verified even after %d remote call(s) — "
+                        "accepting last answer",
+                        task.task_id,
+                        max_remote_calls,
+                    )
 
             cache.put(task.prompt, remote_answer, remote_tokens)
             results.append(
@@ -525,16 +610,23 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                     path="remote",
                     model_used=model_name,
                     tokens_used=remote_tokens,
-                    confidence=round(confidence, 4),
+                    confidence=round(remote_confidence, 4) if remote_confidence is not None else round(confidence, 4),
                     latency_ms=round(latency, 1),
                 )
             )
             continue
 
         # ---- Tier 3: Local inference (confidence-based) ----
-        t_start = time.perf_counter()
-        answer, confidence, tokens_used = local_model.generate(task.prompt)
-        latency = (time.perf_counter() - t_start) * 1000
+        if not local_available:
+            log.info("  → Local model unavailable — escalating directly to remote")
+            answer = ""
+            confidence = 0.0
+            tokens_used = 0
+            latency = 0.0
+        else:
+            t_start = time.perf_counter()
+            answer, confidence, tokens_used = local_model.generate(task.prompt)
+            latency = (time.perf_counter() - t_start) * 1000
 
         if confidence >= config.confidence_threshold:
             # For NER tasks, additionally verify no blatant hallucinations
@@ -565,7 +657,8 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                 )
                 continue
 
-        # ---- Tier 4: Remote escalation ----
+        # ---- Tier 4: Remote escalation (multi-tier, economy → premium) ----
+        t_remote_start = time.perf_counter()
         if confidence < config.confidence_threshold:
             log.info(
                 "  → Local confidence=%.4f < %.2f — escalating to remote",
@@ -576,7 +669,85 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
             log.info(
                 "  → NER hallucination fallthrough — escalating to remote",
             )
-        remote_answer, model_name, remote_tokens = remote_model.generate(task.prompt)
+
+        max_remote_calls = min(2, len(config.allowed_models))
+        remote_answer: str = ""
+        model_name: str = "none"
+        remote_tokens: int = 0
+        remote_confidence: float | None = None
+
+        for tier_index in range(max_remote_calls):
+            (
+                remote_answer,
+                model_name,
+                remote_tokens,
+                remote_confidence,
+            ) = remote_model.generate(task.prompt, model_index=tier_index)
+            log.info(
+                "  → Remote tier %d (%s): %d tokens, confidence=%s",
+                tier_index,
+                model_name,
+                remote_tokens,
+                f"{remote_confidence:.4f}" if remote_confidence is not None else "N/A",
+            )
+
+            if remote_confidence is not None and remote_confidence >= config.remote_escalation_threshold:
+                log.info(
+                    "  → Remote tier %d accepted (confidence=%.4f ≥ %.2f)",
+                    tier_index,
+                    remote_confidence,
+                    config.remote_escalation_threshold,
+                )
+                break  # Accept this model's output
+
+            # For code/math tasks, also run solver verification at the remote tier
+            if task.task_type in ("code_debugging", "code_generation"):
+                code = extract_code(remote_answer)
+                if code is not None:
+                    test_cases = extract_test_cases(task.prompt)
+                    verified, err = verify_code(code, test_cases=test_cases)
+                    if verified:
+                        log.info(
+                            "  → Code verified at remote tier %d (test cases: %d)",
+                            tier_index,
+                            len(test_cases),
+                        )
+                        break
+                    else:
+                        log.warning(
+                            "  → Remote tier %d code failed verification: %s",
+                            tier_index,
+                            err,
+                        )
+                else:
+                    log.warning(
+                        "  → Remote tier %d answer contains no code block",
+                        tier_index,
+                    )
+            elif task.task_type == "math":
+                math_answer = try_solve_math(remote_answer)
+                if math_answer is not None:
+                    log.info("  → Math solved at remote tier %d", tier_index)
+                    remote_answer = math_answer
+                    break
+                else:
+                    log.warning(
+                        "  → Remote tier %d answer not deterministically verifiable as math",
+                        tier_index,
+                    )
+
+            # If this is the last permitted call, accept anyway
+            if tier_index == max_remote_calls - 1:
+                log.warning(
+                    "  → Task %s: remote confidence=%.4f < %.2f after %d call(s) — "
+                    "accepting anyway (no more tiers)",
+                    task.task_id,
+                    remote_confidence if remote_confidence is not None else 0.0,
+                    config.remote_escalation_threshold,
+                    max_remote_calls,
+                )
+
+        remote_latency = (time.perf_counter() - t_remote_start) * 1000
 
         # Cache the remote answer too so repeat queries hit cache
         cache.put(task.prompt, remote_answer, remote_tokens)
@@ -588,8 +759,8 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                 path="remote",
                 model_used=model_name,
                 tokens_used=remote_tokens,
-                confidence=round(confidence, 4),
-                latency_ms=round(latency, 1),
+                confidence=round(remote_confidence, 4) if remote_confidence is not None else round(confidence, 4),
+                latency_ms=round(remote_latency, 1),
             )
         )
 

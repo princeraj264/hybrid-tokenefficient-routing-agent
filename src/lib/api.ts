@@ -6,6 +6,7 @@ export interface QueryResponse {
   confidence: number;
   tokensUsed: number;
   latencyMs: number;
+  modelUsed?: string;
 }
 
 export interface HealthResponse {
@@ -45,6 +46,7 @@ export async function queryAgent(
     confidence: data.confidence ?? 0,
     tokensUsed: data.tokensUsed ?? data.tokens_used ?? 0,
     latencyMs: data.latencyMs ?? data.latency_ms ?? 0,
+    modelUsed: data.modelUsed ?? data.model_used ?? undefined,
   };
 }
 

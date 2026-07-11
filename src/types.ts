@@ -5,6 +5,7 @@ export interface RoutingInfo {
   confidence: number;
   tokensUsed: number;
   latencyMs: number;
+  modelUsed?: string;
 }
 
 export interface Message {

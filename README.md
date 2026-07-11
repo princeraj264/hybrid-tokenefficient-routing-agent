@@ -16,7 +16,8 @@ Every LLM call costs tokens — and those costs add up fast, especially when you
 |------|---------------|---------------|---------------|
 | 🟢 **Cache** | Exact or semantic cache | **Free** (0 tokens) | Exact or near-exact repeat query |
 | 🟡 **Local** | Gemma 2B via `llama-cpp-python` (designed for ROCm on AMD Instinct™ GPU) | **Cheap** (local inference) | Moderate confidence from scoring |
-| 🔴 **Remote** | Fireworks AI API (Qwen 3.7 Plus, `reasoning_effort: 'none'`) | **Full cost** (paid tokens) | Low confidence → escalate to strongest model |
+| 🔴 **Remote Economy** | Fireworks AI API — **Gemma 2 9B IT** (hosted) | **Moderate** (paid tokens) | Low confidence → first escalation tier |
+| 🔴 **Remote Premium** | Fireworks AI API — Qwen 3.7 Plus (`reasoning_effort: 'none'`) | **Full cost** (paid tokens) | Very low confidence OR Gemma fails verification |
 
 The routing decision is based on **log-probability confidence scoring**, not self-reported confidence from the models. The system evaluates how certain the local model is about its generated tokens and escalates only when that certainty falls below a configurable threshold. This gives you provable, measurable confidence rather than a model's own (often inflated) guess.
 
@@ -27,7 +28,7 @@ The routing decision is based on **log-probability confidence scoring**, not sel
 1. **Cache lookup** — The query is checked against an in-memory semantic cache. On a close match the cached answer is returned immediately with zero token cost.
 2. **Local inference** — If the cache misses, Gemma 2B (running locally via `llama-cpp-python`) generates an answer. The system extracts generative log probabilities from the output.
 3. **Confidence scoring** — A mean log-probability score is computed across generated tokens. If the score exceeds a threshold, the local answer is accepted.
-4. **Remote escalation** — If confidence is too low, the query is forwarded to Qwen 3.7 Plus on Fireworks AI (with `reasoning_effort: 'none'` to skip the thinking phase). That answer is authoritative but costs the most tokens.
+4. **Remote escalation (two-tier)** — If confidence is too low, the query is first forwarded to **Gemma 2 9B IT** on Fireworks AI (the economy tier). That model's response is scored via logprobs; if its own confidence is below a second threshold (`REMOTE_ESCALATION_THRESHOLD`, default `0.5`) or fails task-type verification (code/math), the query escalates to **Qwen 3.7 Plus** on Fireworks AI (the premium tier, with `reasoning_effort: 'none'` to skip the thinking phase). At most two Fireworks calls are made per query.
 5. **Cache update** — Every accepted answer (local or remote) is stored back in the cache for future hits.
 
 This means **simple, repetitive, or well-known queries never touch the remote API**, and hard/unseen queries get the full power of a frontier model.
@@ -45,17 +46,21 @@ flowchart TD
     Agent --> Router["🔀 Router\n(Confidence Scorer)"]
     Router --> Cache["🟢 In-Memory Cache\n(cosine similarity\nover embeddings)"]
     Router --> Local["🟡 Local Gemma 2B\n(llama-cpp-python\n· log-prob scoring)"]
-    Router --> Remote["🔴 Remote Fireworks\n(Qwen 3.7 Plus\n· reasoning_effort: none)"]
-    Local -->|"accepted answer\ncached"| Cache
-    Remote -->|"accepted answer\ncached"| Cache
+    Router --> RemoteEconomy["🔴 Remote Economy\nGemma 2 9B IT\n(Fireworks API)"]
+    RemoteEconomy -->|"confidence < esc. threshold\n→ escalate"| RemotePremium["🔴 Remote Premium\nQwen 3.7 Plus\n(Fireworks API)"]
+    Local -->|"accepted · model_used\ncached"| Cache
+    RemoteEconomy -->|"accepted · model_used\ncached"| Cache
+    RemotePremium -->|"accepted · model_used\ncached"| Cache
+    Agent -->|"response includes\nmodel_used field"| Frontend
 ```
 
 1. The **User** submits a query through the React frontend (or places tasks in `./input/tasks.json` for the batch runner).
 2. The **Agent** passes the query to the **Router**, which decides the cheapest path.
 3. If the answer already exists in **Cache**, it is returned immediately at zero token cost.
 4. If not, the **Local Gemma 2B** model generates an answer and the Router scores its confidence.
-5. If local confidence is below threshold, the query is escalated to **Remote Fireworks** (Qwen 3.7 Plus).
-6. Every accepted answer flows back into the **Cache** for future hits.
+5. If local confidence is below threshold, the query escalates to **Remote Economy** (Gemma 2 9B IT on Fireworks API). That model's response is scored via logprobs.
+6. If the economy-tier confidence is below the escalation threshold (or fails task-type verification), the query escalates further to **Remote Premium** (Qwen 3.7 Plus).
+7. Every accepted answer is cached for future reuse, and the response includes a `model_used` field so the frontend can display which model actually answered.
 
 ---
 
@@ -115,7 +120,7 @@ The frontend is a single-page chat app that visualises every routing decision in
 |-------|--------|
 | Runtime | Python 3.11 |
 | Local model | **Gemma 2B** via `llama-cpp-python` (designed for ROCm on AMD Instinct™ GPU) |
-| Remote API | Fireworks AI (Qwen 3.7 Plus, `reasoning_effort: 'none'`) |
+| Remote API | Fireworks AI (Gemma 2 9B IT → Qwen 3.7 Plus, two-tier escalation) |
 
 The agent is a **standalone batch processor** (`agent/task_runner.py`) that reads a JSON array of tasks, routes each through the three-tier pipeline, and writes results to a JSON file. It is not a web server — it runs once top-to-bottom and exits. A Dockerfile and docker-compose service definition are included for containerised execution.
 
@@ -143,6 +148,7 @@ Submit a query to the routing agent.
   "path": "local",
   "confidence": 0.96,
   "tokens_used": 29,
+  "model_used": "gemma-2b",
   "latency_ms": 9506
 }
 ```
@@ -153,6 +159,7 @@ Submit a query to the routing agent.
 | `path` | `"cache"` \| `"local"` \| `"remote"` | Which tier answered |
 | `confidence` | `number` (0–1) | Log-probability confidence score |
 | `tokens_used` | `number` | Tokens consumed (0 for cache hits) |
+| `model_used` | `string` | The model that generated the answer (`"gemma-2b"`, `"gemma-2-9b-it"`, or `"qwen3.7-plus"`) |
 | `latency_ms` | `number` | Total request latency in milliseconds |
 
 > **Note:** The frontend also accepts `content` (alias for `answer`), `route` (alias for `path`), `tokensUsed` / `latencyMs` (camelCase variants), and `cache_hit` (alias for `"cache"` path) to handle minor inconsistencies across backend versions.
@@ -183,7 +190,7 @@ Run the full system (frontend + task-runner agent) with a single command.
 
 ```bash
 export FIREWORKS_API_KEY=fw_your_key_here           # required
-export ALLOWED_MODELS=accounts/fireworks/models/qwen3.7-plus  # cheapest-first
+export ALLOWED_MODELS=accounts/fireworks/models/gemma-2-9b-it,accounts/fireworks/models/qwen3.7-plus  # cheapest-first
 export VITE_API_URL=http://frontend:8000             # optional, for custom backends
 ```
 
@@ -206,6 +213,8 @@ docker compose up
 - **Agent** reads tasks from `./input/tasks.json`, writes results to `./output/results.json`
 
 The agent runs once and exits. To re-run on updated tasks:
+
+> 💡 A sample `input/tasks.json` with 8 tasks (one per supported type) is already included in the repo — `docker compose up` / `docker compose run --rm agent` works immediately with no setup beyond setting your `FIREWORKS_API_KEY`.
 
 ```bash
 docker compose run --rm agent
@@ -233,7 +242,7 @@ pip install llama-cpp-python requests numpy
 # Set the path to your model file
 export GEMMA_MODEL_PATH=/path/to/gemma-2-2b-it-q4_k_m.gguf
 export FIREWORKS_API_KEY=fw_your_key_here
-export ALLOWED_MODELS=accounts/fireworks/models/qwen3.7-plus
+export ALLOWED_MODELS=accounts/fireworks/models/gemma-2-9b-it,accounts/fireworks/models/qwen3.7-plus
 
 # Run once with your tasks
 python task_runner.py
@@ -259,7 +268,7 @@ npm run build      # output → dist/
 
 ## Evaluation
 
-> **Placeholder** — real numbers will be inserted after running the evaluation benchmark script.
+> **Run `python agent/benchmark.py`** (or `docker compose run --rm agent` with `BENCHMARK_TASKS_PATH` set) to populate this table. The sample `input/tasks.json` has 8 tasks covering all supported types.
 
 The following metrics are collected over a diverse task set spanning factual QA, math, sentiment analysis, summarisation, NER, code debugging, logic puzzles, and code generation.
 
@@ -267,7 +276,7 @@ The following metrics are collected over a diverse task set spanning factual QA,
 |--------|-------|--------|
 | 🟢 **Cache hit rate** | — % | Queries answered instantly from in-memory cache |
 | 🟡 **Local resolution rate** | — % | Queries answered by local Gemma 2B (confidence ≥ threshold) |
-| 🔴 **Remote escalation rate** | — % | Queries forwarded to Fireworks Qwen 3.7 Plus |
+| 🔴 **Remote escalation rate** | — % | Queries forwarded to Fireworks (economy or premium tier) |
 | 💰 **Average token savings** | — % | Tokens saved vs. always-remote baseline |
 | ⏱️ **Average latency (local)** | — ms | Mean end-to-end time for local inference path |
 | ⏱️ **Average latency (remote)** | — ms | Mean end-to-end time for remote escalation path |
@@ -276,13 +285,14 @@ The following metrics are collected over a diverse task set spanning factual QA,
 ### How to run the benchmark
 
 ```bash
-# 1. Place your test tasks in ./input/tasks.json (or set TASKS_INPUT_PATH)
-# 2. Run the agent:
-docker compose run --rm agent
-# 3. Results appear in ./output/results.json
+# 1. The sample input/tasks.json is already in place (8 tasks, one per type)
+# 2. Run the benchmark script:
+docker compose run --rm agent python /app/agent/benchmark.py
+# 3. Results appear in ./output/benchmark_summary.json
+# 4. Copy the numbers from the stdout table into the Evaluation section above
 ```
 
-The benchmark evaluates every task through the full routing pipeline; no separate "eval mode" is needed.
+The benchmark evaluates every task through the full routing pipeline (cache → local → remote economy → remote premium) and prints an overall summary plus a per-task-type breakdown to stdout. A JSON copy is written to `./output/benchmark_summary.json`.
 
 ---
 
@@ -342,21 +352,6 @@ The current LRU eviction policy is simple but naive — it treats every cached e
 - **Frequency** — A query answered 50 times should outlive one answered twice, even if the latter was used more recently.
 - **Recency × Frequency (LFU + LRU hybrid)** — The cache could use a weighted score combining both dimensions.
 - **Semantic diversity** — When evicting, prefer to keep entries that are maximally dissimilar from each other to maximise coverage of the embedding space.
-
-### Multi-Model Routing Across Fireworks Tiers
-
-The remote tier is currently hardcoded to Qwen 3.7 Plus. A natural expansion is to support **multiple remote tiers** with graduated cost and capability:
-
-| Tier | Model | Relative Cost | When Used |
-|------|-------|---------------|-----------|
-| 🔴 **Remote economy** | Qwen 3.7 (non-Plus) | Lower | Confidence below threshold but not terrible |
-| 🔴 **Remote premium** | Qwen 3.7 Plus | Higher | Very low confidence or first-of-kind query |
-
-This would let the router escalate in two steps instead of one — the economy tier handles moderate uncertainty, and only truly novel or ambiguous queries touch the most expensive model.
-
-### API Server Mode
-
-The agent currently runs as a batch processor. Wrapping it in a lightweight web server (e.g., FastAPI) would allow it to accept queries at runtime from the frontend or other services, enabling real-time interactive use without the batch round-trip.
 
 ---
 

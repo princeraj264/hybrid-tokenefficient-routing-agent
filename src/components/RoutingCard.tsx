@@ -7,6 +7,7 @@ export interface RoutingCardProps {
   confidence: number;
   tokensUsed: number;
   latencyMs: number;
+  modelUsed?: string;
 }
 
 const routeMeta: Record<RoutePath, { label: string; icon: typeof Zap; colorClass: string }> = {
@@ -34,11 +35,12 @@ const fallbackMeta = {
   colorClass: 'text-foreground/50 border-border/30 bg-muted/50',
 };
 
-const routeDescriptions: Record<RoutePath, string> = {
-  cache: 'Response served from the semantic cache — instant, zero token cost.',
-  local: 'Resolved locally via Gemma 2B on ROCm — low latency, no API cost.',
-  remote: 'Fell back to Fireworks API (Llama 3.1 70B) — highest quality, highest cost.',
-};
+function routeDescription(path: RoutePath, model?: string): string {
+  if (path === 'cache') return 'Response served from the semantic cache — instant, zero token cost.';
+  if (path === 'local') return 'Resolved locally via Gemma 2B on ROCm — low latency, no API cost.';
+  if (model) return `Fell back to ${model} via Fireworks API — highest quality, highest cost.`;
+  return 'Fell back to Fireworks API — highest quality, highest cost.';
+}
 
 function ConfidenceBar({ confidence }: { confidence: number }) {
   const pct = Math.round(confidence * 100);
@@ -79,6 +81,7 @@ export default function RoutingCard({
   confidence,
   tokensUsed,
   latencyMs,
+  modelUsed,
 }: RoutingCardProps) {
   const [expanded, setExpanded] = useState(false);
   const meta = routeMeta[path] ?? fallbackMeta;
@@ -100,6 +103,13 @@ export default function RoutingCard({
             <meta.icon className="w-3 h-3" aria-hidden="true" />
             {meta.label}
           </span>
+
+          {/* Model name (remote only) */}
+          {path === 'remote' && modelUsed && (
+            <span className="text-[11px] text-foreground/50 font-mono truncate max-w-[160px] hidden sm:inline">
+              {modelUsed}
+            </span>
+          )}
 
           {/* Summary stats */}
           <span className="text-foreground/40 hidden sm:inline">·</span>
@@ -133,18 +143,26 @@ export default function RoutingCard({
           <div className="px-3 pb-3 space-y-2.5 border-t border-border/20 pt-2.5">
             <ConfidenceBar confidence={confidence} />
 
-            {/* Stats row with descriptions */}
+            {/* Stats row with model name */}
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3 text-xs text-foreground/60">
                 <span className="tabular-nums">{tokensUsed} tokens</span>
                 <span className="text-foreground/30">·</span>
                 <span className="tabular-nums">{latencyMs}ms</span>
+                {modelUsed && (
+                  <>
+                    <span className="text-foreground/30">·</span>
+                    <span className="font-mono text-[11px] text-foreground/50 truncate max-w-[200px]" title={modelUsed}>
+                      {modelUsed}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Route description */}
             <p className="text-[11px] text-foreground/40 leading-relaxed">
-              {routeDescriptions[path] ?? 'Routing decision logged.'}
+              {routeDescription(path, modelUsed)}
             </p>
           </div>
         </div>

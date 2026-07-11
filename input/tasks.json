@@ -1,0 +1,42 @@
+[
+  {
+    "task_id": "1",
+    "task_type": "factual_qa",
+    "prompt": "What is the chemical symbol for gold?"
+  },
+  {
+    "task_id": "2",
+    "task_type": "math",
+    "prompt": "Solve for x: 3x + 7 = 22"
+  },
+  {
+    "task_id": "3",
+    "task_type": "sentiment",
+    "prompt": "The hotel room was clean and the staff were incredibly friendly, but the noise from the street made it hard to sleep."
+  },
+  {
+    "task_id": "4",
+    "task_type": "summarization",
+    "prompt": "Photosynthesis is the process by which green plants and some other organisms use sunlight to synthesize nutrients from carbon dioxide and water. In plants, photosynthesis generally takes place in the chloroplasts, which contain the pigment chlorophyll. The process converts light energy into chemical energy, producing glucose and oxygen as byproducts. The overall equation is 6CO₂ + 6H₂O → C₆H₁₂O₆ + 6O₂."
+  },
+  {
+    "task_id": "5",
+    "task_type": "ner",
+    "prompt": "Dr. Sarah Chen published her research on quantum computing at MIT in 2023, collaborating with researchers from Google and IBM in New York."
+  },
+  {
+    "task_id": "6",
+    "task_type": "code_debugging",
+    "prompt": "This Python function has a bug. Fix it:\n\ndef find_largest(numbers):\n    largest = 0\n    for n in numbers:\n        if n > largest:\n            largest = n\n    return largest"
+  },
+  {
+    "task_id": "7",
+    "task_type": "logic",
+    "prompt": "All roses are flowers. Some flowers fade quickly. Therefore, some roses fade quickly. Is this argument valid? Explain your reasoning."
+  },
+  {
+    "task_id": "8",
+    "task_type": "code_generation",
+    "prompt": "Write a Python function that takes a list of integers and returns a new list containing only the even numbers, sorted in descending order."
+  }
+]

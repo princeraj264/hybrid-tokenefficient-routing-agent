@@ -13,7 +13,7 @@ Endpoints:
 
 Usage:
     export FIREWORKS_API_KEY=fw_...
-    export ALLOWED_MODELS=accounts/fireworks/models/qwen3.7-plus
+    export ALLOWED_MODELS=accounts/fireworks/models/gemma-2-9b-it,accounts/fireworks/models/qwen3.7-plus
     uvicorn api_server:app --host 0.0.0.0 --port 8000
 """
 
@@ -101,6 +101,7 @@ class QueryResponse(BaseModel):
     confidence: float
     tokens_used: int
     latency_ms: float
+    model_used: str | None = None
 
 class HealthResponse(BaseModel):
     status: str
@@ -206,32 +207,68 @@ async def query(req: QueryRequest) -> QueryResponse:
             + err
             + "\nPlease fix the code and respond with a corrected ```python block.]"
         )
-        remote_answer, model_name, remote_tokens = _remote_model.generate(
-            repair_prompt
-        )
 
-        # Verify the remote answer too (one escalation max)
-        remote_code = extract_code(remote_answer)
-        if remote_code is not None:
-            remote_verified, remote_err = verify_code(
-                remote_code, test_cases=test_cases
+        # Multi-tier remote: try economy first, premium if verification fails
+        max_remote_calls = min(2, len(_config.allowed_models))
+        remote_answer: str = ""
+        model_name: str = "none"
+        remote_tokens: int = 0
+        remote_confidence: float | None = None
+
+        for tier_index in range(max_remote_calls):
+            (
+                remote_answer,
+                model_name,
+                remote_tokens,
+                remote_confidence,
+            ) = _remote_model.generate(repair_prompt, model_index=tier_index)
+            log.info(
+                "  → Remote tier %d (%s): %d tokens",
+                tier_index,
+                model_name,
+                remote_tokens,
             )
-            if not remote_verified:
-                log.warning(
-                    "  → Remote code also failed verification: %s",
-                    remote_err,
+
+            # Verify the remote answer
+            remote_code = extract_code(remote_answer)
+            if remote_code is not None:
+                remote_verified, remote_err = verify_code(
+                    remote_code, test_cases=test_cases
                 )
-        else:
-            log.warning(
-                "  → Remote answer contains no code block",
-            )
+                if remote_verified:
+                    log.info(
+                        "  → Code verified at remote tier %d (test cases: %d)",
+                        tier_index,
+                        len(test_cases),
+                    )
+                    break  # Accept this tier's answer
+                else:
+                    log.warning(
+                        "  → Remote tier %d code failed verification: %s",
+                        tier_index,
+                        remote_err,
+                    )
+            else:
+                log.warning(
+                    "  → Remote tier %d answer contains no code block",
+                    tier_index,
+                )
+
+            # If this was the last permitted call, accept anyway
+            if tier_index == max_remote_calls - 1:
+                log.warning(
+                    "  → Query code could not be verified even after %d remote call(s) — "
+                    "accepting last answer",
+                    max_remote_calls,
+                )
 
         _cache.put(prompt, remote_answer, remote_tokens)
         total_ms = (time.perf_counter() - start) * 1000
         return QueryResponse(
             answer=remote_answer,
             path="remote",
-            confidence=round(confidence, 4),
+            model_used=model_name,
+            confidence=round(remote_confidence, 4) if remote_confidence is not None else round(confidence, 4),
             tokens_used=remote_tokens,
             latency_ms=round(total_ms, 1),
         )
@@ -267,7 +304,7 @@ async def query(req: QueryRequest) -> QueryResponse:
                 latency_ms=round(total_ms, 1),
             )
 
-    # ---- Tier 4: Remote escalation ----
+    # ---- Tier 4: Remote escalation (multi-tier, economy → premium) ----
     if confidence < _config.confidence_threshold:
         log.info(
             "  → Local confidence=%.4f < %.2f — escalating to remote",
@@ -278,14 +315,91 @@ async def query(req: QueryRequest) -> QueryResponse:
         log.info(
             "  → NER hallucination fallthrough — escalating to remote",
         )
-    remote_answer, model_name, remote_tokens = _remote_model.generate(prompt)
+
+    max_remote_calls = min(2, len(_config.allowed_models))
+    remote_answer: str = ""
+    model_name: str = "none"
+    remote_tokens: int = 0
+    remote_confidence: float | None = None
+
+    for tier_index in range(max_remote_calls):
+        (
+            remote_answer,
+            model_name,
+            remote_tokens,
+            remote_confidence,
+        ) = _remote_model.generate(prompt, model_index=tier_index)
+        log.info(
+            "  → Remote tier %d (%s): %d tokens, confidence=%s",
+            tier_index,
+            model_name,
+            remote_tokens,
+            f"{remote_confidence:.4f}" if remote_confidence is not None else "N/A",
+        )
+
+        if remote_confidence is not None and remote_confidence >= _config.remote_escalation_threshold:
+            log.info(
+                "  → Remote tier %d accepted (confidence=%.4f ≥ %.2f)",
+                tier_index,
+                remote_confidence,
+                _config.remote_escalation_threshold,
+            )
+            break  # Accept this model's output
+
+        # For code/math tasks, also run solver verification at the remote tier
+        if task_type in ("code_debugging", "code_generation"):
+            code = extract_code(remote_answer)
+            if code is not None:
+                test_cases = extract_test_cases(prompt)
+                verified, err = verify_code(code, test_cases=test_cases)
+                if verified:
+                    log.info(
+                        "  → Code verified at remote tier %d (test cases: %d)",
+                        tier_index,
+                        len(test_cases),
+                    )
+                    break
+                else:
+                    log.warning(
+                        "  → Remote tier %d code failed verification: %s",
+                        tier_index,
+                        err,
+                    )
+            else:
+                log.warning(
+                    "  → Remote tier %d answer contains no code block",
+                    tier_index,
+                )
+        elif task_type == "math":
+            math_answer = try_solve_math(remote_answer)
+            if math_answer is not None:
+                log.info("  → Math solved at remote tier %d", tier_index)
+                remote_answer = math_answer
+                break
+            else:
+                log.warning(
+                    "  → Remote tier %d answer not deterministically verifiable as math",
+                    tier_index,
+                )
+
+        # If this is the last permitted call, accept anyway
+        if tier_index == max_remote_calls - 1:
+            log.warning(
+                "  → Query: remote confidence=%.4f < %.2f after %d call(s) — "
+                "accepting anyway (no more tiers)",
+                remote_confidence if remote_confidence is not None else 0.0,
+                _config.remote_escalation_threshold,
+                max_remote_calls,
+            )
+
     _cache.put(prompt, remote_answer, remote_tokens)
     total_ms = (time.perf_counter() - start) * 1000
 
     return QueryResponse(
         answer=remote_answer,
         path="remote",
-        confidence=round(confidence, 4),
+        model_used=model_name,
+        confidence=round(remote_confidence, 4) if remote_confidence is not None else round(confidence, 4),
         tokens_used=remote_tokens,
         latency_ms=round(total_ms, 1),
     )
