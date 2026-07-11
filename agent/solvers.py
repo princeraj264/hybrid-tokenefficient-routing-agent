@@ -256,6 +256,21 @@ def extract_test_cases(prompt: str) -> list[tuple[str, str]]:
     return cases
 
 
+# Network-blocking preamble — injected at the TOP of every verified script
+# so monkey-patches are active before any user code runs.
+_NETWORK_BLOCK_PREAMBLE = """\
+import socket as _socket
+
+def _blocked(*args, **kwargs):
+    raise OSError("Network access is disabled during code verification")
+
+_socket.socket = _blocked
+_socket.create_connection = _blocked
+_socket.create_server = _blocked
+del _socket, _blocked
+"""
+
+
 def verify_code(
     code: str,
     test_cases: list[tuple[str, str]] | None = None,
@@ -273,19 +288,25 @@ def verify_code(
     This provides basic containment — no network, no inherited environment
     variables, no user site-packages.
 
+    Additionally, a network-blocking preamble is prepended to every
+    script that monkey-patches ``socket.socket``, ``socket.create_connection``,
+    and ``socket.create_server`` to raise ``OSError`` immediately on any
+    call, preventing generated code from making outbound network requests
+    during verification.
+
     Returns
     -------
     ``(True, "")`` if the process exits with code 0,
     ``(False, stderr)`` on a non-zero exit (includes assertion failures), or
     ``(False, "timeout")`` if the process times out.
     """
-    # Build final script: user code + optional test-case assertions
-    body = code
+    # Build final script: network block preamble + user code + optional test cases
+    body = _NETWORK_BLOCK_PREAMBLE + code
     if test_cases:
         assertions = "\n\n# ---- auto-generated test cases ----\n"
         for expr, expected in test_cases:
             assertions += f"assert {expr} == {expected}\n"
-        body = code + assertions
+        body = body + assertions
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", delete=False
@@ -703,6 +724,61 @@ def _test_classify_task() -> None:
     assert failed == 0, f"{failed} test(s) failed"
 
 
+def _test_verify_code_network_block() -> None:
+    """Verify that ``verify_code`` blocks network calls while passing safe code."""
+
+    print("verify_code network-block test:")
+
+    # 1. Code that tries to open a socket → should fail
+    code_socket = (
+        "import socket\n"
+        's = socket.socket()\n'
+    )
+    ok, err = verify_code(code_socket, timeout=3)
+    assert not ok, "Expected socket code to be blocked, but it passed"
+    assert "Network access is disabled" in err, (
+        f"Expected 'Network access is disabled' in error, got: {err[:100]!r}"
+    )
+    print("  [PASS] socket.socket() blocked")
+
+    # 2. Code that tries socket.create_connection → should fail
+    code_create_conn = (
+        "import socket\n"
+        'socket.create_connection(("example.com", 80))\n'
+    )
+    ok, err = verify_code(code_create_conn, timeout=3)
+    assert not ok, "Expected create_connection to be blocked, but it passed"
+    assert "Network access is disabled" in err, (
+        f"Expected 'Network access is disabled' in error, got: {err[:100]!r}"
+    )
+    print("  [PASS] socket.create_connection() blocked")
+
+    # 3. Code that tries urllib (which uses socket under the hood) → should fail
+    code_urllib = (
+        "import urllib.request\n"
+        'urllib.request.urlopen("http://example.com")\n'
+    )
+    ok, err = verify_code(code_urllib, timeout=3)
+    assert not ok, "Expected urllib to be blocked, but it passed"
+    # urllib will fail because socket.socket raises OSError
+    assert ok is False, "urllib.request.urlopen() should be blocked"
+    print("  [PASS] urllib.request.urlopen() blocked")
+
+    # 4. Pure computation with no network → should pass
+    code_safe = (
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "result = add(2, 3)\n"
+        "assert result == 5\n"
+    )
+    ok, err = verify_code(code_safe, timeout=3)
+    assert ok, f"Expected safe code to pass, but got error: {err[:100]!r}"
+    print("  [PASS] Pure computation (no network) passes unaffected")
+
+    print("  verify_code network-block: 4/4 passed")
+
+
 if __name__ == "__main__":
     _test_classify_task()
+    _test_verify_code_network_block()
     print("All solvers.py inline tests passed.")
