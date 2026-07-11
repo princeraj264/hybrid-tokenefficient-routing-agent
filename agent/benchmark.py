@@ -7,7 +7,8 @@ Manually-run script that loads a task set, runs the full four-tier pipeline
 (reusing run_pipeline() from task_runner.py), and produces:
 
   - A clean summary table printed to stdout
-  - A machine-readable JSON summary written to ./output/benchmark_summary.json
+  - A machine-readable JSON summary written alongside the results file
+    (same directory as RESULTS_OUTPUT_PATH), named benchmark_summary.json
 
 Usage:
     export BENCHMARK_TASKS_PATH=/input/benchmark-tasks.json   (default: ./input/tasks.json)
@@ -162,6 +163,98 @@ def print_type_table(
     print()
 
 
+def print_aggregate_summary(summary: dict[str, Any]) -> None:
+    """Print the aggregate summary to stdout."""
+    overall = summary["overall"]
+    sep = "─" * 68
+
+    print()
+    print("╭" + "─" * 66 + "╮")
+    print(f"│  {'Aggregate Metrics Summary':^62s}  │")
+    print("╰" + "─" * 66 + "╯")
+    print()
+
+    print(f"  {'Metric':<32s} {'Value':>16s}")
+    print(f"  {sep}")
+
+    lines = [
+        ("Total tasks", f"{overall['total_tasks']}"),
+        ("Cache hits", f"{overall['cache_hits']}"),
+        ("Local answers", f"{overall['local_answers']}"),
+        ("Remote escalations", f"{overall['remote_escalations']}"),
+        ("Deadline fallbacks", f"{overall['deadline_fallbacks']}"),
+        ("Total tokens used", f"{overall['total_tokens_used']:,}"),
+        ("Avg tokens per task", f"{overall['avg_tokens_per_task']:,.1f}"),
+        ("Avg latency (ms)", f"{overall['avg_latency_ms']:,.1f}"),
+        ("Remote escalation rate", f"{overall['remote_escalation_rate']:.1f}%"),
+    ]
+    for label, value in lines:
+        print(f"  {label:<32s} {value:>16s}")
+
+    print()
+    print(f"  Path distribution:")
+    for path, count in overall["by_path"].items():
+        pct_str = pct(count, overall["total_tasks"])
+        print(f"    {path:<24s} {count:>6d} {pct_str:>9s}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# Aggregate summary builder
+# ---------------------------------------------------------------------------
+
+def build_aggregate_summary(
+    results: list[TaskResult],
+    path_counts: Counter[str],
+    total_tokens: int,
+    avg_tokens: float,
+) -> dict[str, Any]:
+    """Build the aggregate summary dict from pipeline results.
+
+    Metrics computed:
+      - total_tasks
+      - cache_hits, local_answers, remote_escalations (by raw ``r.path``)
+      - deadline_fallbacks (count of results with ``deadline_fallback=True``)
+      - total_tokens_used
+      - avg_tokens_per_task
+      - avg_latency_ms (mean of all non-None ``latency_ms`` values)
+      - remote_escalation_rate (as a percentage)
+      - by_path (raw path distribution: cache/local/remote)
+    """
+    total = len(results)
+
+    cache_hits = sum(1 for r in results if r.path == "cache")
+    local_answers = sum(1 for r in results if r.path == "local")
+    remote_escalations = sum(1 for r in results if r.path == "remote")
+    deadline_fallbacks = sum(1 for r in results if r.deadline_fallback)
+
+    # Average latency: mean of all non-None latency_ms values
+    latencies = [r.latency_ms for r in results if r.latency_ms is not None]
+    avg_latency_ms = sum(latencies) / len(latencies) if latencies else 0.0
+
+    remote_escalation_rate = (remote_escalations / total * 100.0) if total > 0 else 0.0
+
+    overall: dict[str, Any] = {
+        "total_tasks": total,
+        "cache_hits": cache_hits,
+        "local_answers": local_answers,
+        "remote_escalations": remote_escalations,
+        "deadline_fallbacks": deadline_fallbacks,
+        "by_path": {
+            "cache": path_counts.get("cache", 0),
+            "local_math_solved": path_counts.get(MATH_SOLVED_TAG, 0),
+            "local_model": path_counts.get(LOCAL_MODEL_TAG, 0),
+            "remote": path_counts.get("remote", 0),
+        },
+        "total_tokens_used": total_tokens,
+        "avg_tokens_per_task": round(avg_tokens, 1),
+        "avg_latency_ms": round(avg_latency_ms, 1),
+        "remote_escalation_rate": round(remote_escalation_rate, 1),
+    }
+
+    return {"overall": overall}
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -211,10 +304,6 @@ def main() -> int:
     avg_tokens = total_tokens / total if total > 0 else 0.0
 
     # ---- Estimated token savings vs. "always remote" baseline ----
-    # For tasks that went to remote, we know their actual remote cost.
-    # For tasks that didn't go remote, we estimate what they *would* have
-    # cost remotely by using the average tokens of the tasks that *did* go
-    # remote (excluding zero-token failures).  This gives a fair baseline.
     remote_token_list = [
         r.tokens_used
         for r in results
@@ -223,13 +312,12 @@ def main() -> int:
     avg_remote_tokens = (
         sum(remote_token_list) / len(remote_token_list)
         if remote_token_list
-        else 256  # fallback default
+        else 256
     )
     hypothetical_remote_total = total * avg_remote_tokens
     estimated_savings = int(hypothetical_remote_total - total_tokens)
 
     # ---- Per-task-type breakdown ----
-
     type_breakdown: dict[str, dict[str, Any]] = {}
 
     for ttype in sorted({t.task_type for t in tasks}):
@@ -259,33 +347,26 @@ def main() -> int:
             "avg_tokens": avg_type_tokens,
         }
 
+    # ---- Build the new aggregate summary ----
+    agg_summary = build_aggregate_summary(results, path_counts, total_tokens, avg_tokens)
+
     # ---- Print tables to stdout ----
     print_overall_table(total, path_counts, tokens_by_path, avg_tokens, estimated_savings)
     print_type_table(type_breakdown, total)
+    print_aggregate_summary(agg_summary)
 
-    # ---- Write JSON summary ----
+    # ---- Write JSON summary to the same directory as results_output_path ----
     summary: dict[str, Any] = {
         "config": {
             "tasks_path": config.tasks_input_path,
             "confidence_threshold": config.confidence_threshold,
             "allowed_models": config.allowed_models,
         },
-        "overall": {
-            "total_tasks": total,
-            "by_path": {
-                "cache": path_counts.get("cache", 0),
-                "local_math_solved": path_counts.get(MATH_SOLVED_TAG, 0),
-                "local_model": path_counts.get(LOCAL_MODEL_TAG, 0),
-                "remote": path_counts.get("remote", 0),
-            },
-            "total_tokens_used": total_tokens,
-            "avg_tokens_per_task": round(avg_tokens, 1),
-            "estimated_tokens_saved_vs_always_remote": estimated_savings,
-        },
+        "overall": agg_summary["overall"],
         "by_task_type": type_breakdown,
     }
 
-    output_dir = Path("./output")
+    output_dir = Path(os.environ.get("RESULTS_OUTPUT_PATH", "/output/results.json")).parent
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "benchmark_summary.json"
     output_path.write_text(

@@ -23,6 +23,48 @@ The routing decision is based on **log-probability confidence scoring**, not sel
 
 ---
 
+## Screenshots
+
+<img src="docs/assets/screenshots/welcome-state.jpg" width="240" align="left" style="margin-right: 16px; margin-bottom: 16px;">
+
+**Welcome state** — The clean, empty chat view that greets users on first load. A colourful prompt chip hints at the kind of queries the agent can handle.
+
+<br clear="left">
+
+---
+
+<img src="docs/assets/screenshots/cache-hit.png" width="240" align="left" style="margin-right: 16px; margin-bottom: 16px;">
+
+**Cache hit** — An identical or semantically similar query is answered instantly from the in-memory cache at zero token cost, shown here with a green 🟢 badge and `0 tokens used`.
+
+<br clear="left">
+
+---
+
+<img src="docs/assets/screenshots/local-routing.jpg" width="240" align="left" style="margin-right: 16px; margin-bottom: 16px;">
+
+**Local routing** — A first-seen factual query is answered by the local Gemma 2B model. The amber 🟡 badge, confidence bar, and token count show the local path was taken.
+
+<br clear="left">
+
+---
+
+<img src="docs/assets/screenshots/remote-routing.png" width="240" align="left" style="margin-right: 16px; margin-bottom: 16px;">
+
+**Remote escalation** — A more complex query (e.g. code generation) where local confidence fell below threshold. The red 🔴 badge signals that Fireworks AI handled the answer.
+
+<br clear="left">
+
+---
+
+<img src="docs/assets/screenshots/session-summary.png" width="240" align="left" style="margin-right: 16px; margin-bottom: 16px;">
+
+**Session summary** — The sidebar aggregates every routing decision: cache hit rate, local resolution rate, total tokens used, and tokens saved vs. an always-remote baseline.
+
+<br clear="left">
+
+---
+
 ## How Routing Works (Step by Step)
 
 1. **Cache lookup** — The query is checked against an in-memory semantic cache. On a close match the cached answer is returned immediately with zero token cost.
@@ -123,6 +165,8 @@ The frontend is a single-page chat app that visualises every routing decision in
 | Remote API | Fireworks AI (Gemma 2 9B IT → Qwen 3.7 Plus, two-tier escalation) |
 
 The agent is a **standalone batch processor** (`agent/task_runner.py`) that reads a JSON array of tasks, routes each through the three-tier pipeline, and writes results to a JSON file. It is not a web server — it runs once top-to-bottom and exits. A Dockerfile and docker-compose service definition are included for containerised execution.
+
+> **⚠️ For AMD Hackathon Track 1 submission:** build and push `agent/Dockerfile` (the task-runner batch image) — this is the graded artifact. `agent/Dockerfile.server` and `Dockerfile.frontend` are for local demo purposes only and are **not** the graded artifact.
 
 ---
 

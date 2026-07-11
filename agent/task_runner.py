@@ -74,6 +74,7 @@ class TaskResult:
     tokens_used: int | None = None
     confidence: float | None = None
     latency_ms: float | None = None
+    deadline_fallback: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +609,7 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                         tokens_used=tokens_used,
                         confidence=round(confidence, 4),
                         latency_ms=round(latency, 1),
+                        deadline_fallback=True,
                     )
                 )
                 continue
@@ -755,6 +757,7 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                     tokens_used=tokens_used,
                     confidence=round(confidence, 4),
                     latency_ms=round(latency, 1),
+                    deadline_fallback=True,
                 )
             )
             continue
