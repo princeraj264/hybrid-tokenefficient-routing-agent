@@ -796,12 +796,32 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
             )
 
             if remote_confidence is not None and remote_confidence >= config.remote_escalation_threshold:
-                log.info(
-                    "  → Remote tier %d accepted (confidence=%.4f ≥ %.2f)",
-                    tier_index,
-                    remote_confidence,
-                    config.remote_escalation_threshold,
-                )
+                # For NER tasks, verify entity grounding before accepting
+                if task.task_type == "ner" and not verify_ner_answer(task.prompt, remote_answer):
+                    if tier_index < max_remote_calls - 1:
+                        log.warning(
+                            "  → Remote tier %d (confidence=%.4f ≥ %.2f) — "
+                            "NER grounding FAILED, continuing to next tier",
+                            tier_index,
+                            remote_confidence,
+                            config.remote_escalation_threshold,
+                        )
+                        continue
+                    else:
+                        log.warning(
+                            "  → Task %s: final answer (tier %d, confidence=%.4f) "
+                            "failed NER grounding verification — accepting anyway",
+                            task.task_id,
+                            tier_index,
+                            remote_confidence,
+                        )
+                else:
+                    log.info(
+                        "  → Remote tier %d accepted (confidence=%.4f ≥ %.2f)",
+                        tier_index,
+                        remote_confidence,
+                        config.remote_escalation_threshold,
+                    )
                 break  # Accept this model's output
 
             # For code/math tasks, also run solver verification at the remote tier
@@ -842,14 +862,22 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
 
             # If this is the last permitted call, accept anyway
             if tier_index == max_remote_calls - 1:
-                log.warning(
-                    "  → Task %s: remote confidence=%.4f < %.2f after %d call(s) — "
-                    "accepting anyway (no more tiers)",
-                    task.task_id,
-                    remote_confidence if remote_confidence is not None else 0.0,
-                    config.remote_escalation_threshold,
-                    max_remote_calls,
-                )
+                if task.task_type == "ner":
+                    log.warning(
+                        "  → Task %s: NER grounding failed after %d remote call(s) — "
+                        "accepting last answer despite NER hallucination risk",
+                        task.task_id,
+                        max_remote_calls,
+                    )
+                else:
+                    log.warning(
+                        "  → Task %s: remote confidence=%.4f < %.2f after %d call(s) — "
+                        "accepting anyway (no more tiers)",
+                        task.task_id,
+                        remote_confidence if remote_confidence is not None else 0.0,
+                        config.remote_escalation_threshold,
+                        max_remote_calls,
+                    )
 
         remote_latency = (time.perf_counter() - t_remote_start) * 1000
 
