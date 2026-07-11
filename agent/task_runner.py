@@ -107,6 +107,9 @@ class Config:
         default_factory=lambda: os.environ.get("STRICT_OUTPUT_SCHEMA", "false").lower()
         in ("1", "true", "yes")
     )
+    max_runtime_seconds: float = field(
+        default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "540"))
+    )
 
     def __post_init__(self) -> None:
         raw = os.environ.get("ALLOWED_MODELS", "")
@@ -492,7 +495,24 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
 
     results: list[TaskResult] = []
 
+    pipeline_start = time.perf_counter()
+    max_runtime = config.max_runtime_seconds
+    deadline_hit = False
+
     for task in tasks:
+        # Check wall-clock deadline — once hit, skip all remote escalation
+        if not deadline_hit:
+            elapsed = time.perf_counter() - pipeline_start
+            if elapsed > max_runtime:
+                deadline_hit = True
+                remaining = len(tasks) - len(results)
+                log.warning(
+                    "RUN DEADLINE REACHED: %.1fs elapsed (limit %.0fs). "
+                    "Skipping remote escalation for %d remaining task(s) — "
+                    "falling back to best-effort local answers.",
+                    elapsed, max_runtime, remaining,
+                )
+
         log.info("Processing task %s (%s) ...", task.task_id, task.task_type)
 
         # ---- Tier 1: Cache ----
@@ -567,7 +587,31 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
             else:
                 err = "No code block found in local output"
 
-            # Local code missing or failed verification — escalate to remote
+            # Local code missing or failed verification
+            if deadline_hit:
+                log.info(
+                    "  → Deadline reached — accepting local answer "
+                    "without remote escalation for task %s",
+                    task.task_id,
+                )
+                fallback_answer = (
+                    answer.strip()
+                    if answer.strip()
+                    else "[Deadline reached — best-effort answer, no local output available]"
+                )
+                cache.put(task.prompt, fallback_answer, tokens_used)
+                results.append(
+                    TaskResult(
+                        task_id=task.task_id,
+                        answer=fallback_answer,
+                        path="local",
+                        tokens_used=tokens_used,
+                        confidence=round(confidence, 4),
+                        latency_ms=round(latency, 1),
+                    )
+                )
+                continue
+
             log.info(
                 "  → Local code %s — escalating to remote",
                 "missing" if code is None else "failed verification",
@@ -690,6 +734,31 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                 continue
 
         # ---- Tier 4: Remote escalation (multi-tier, economy → premium) ----
+        if deadline_hit:
+            log.info(
+                "  → Deadline reached — accepting local answer "
+                "(confidence=%.4f) without remote escalation for task %s",
+                confidence,
+                task.task_id,
+            )
+            fallback_answer = (
+                answer.strip()
+                if answer.strip()
+                else "[Deadline reached — best-effort answer, no local output available]"
+            )
+            cache.put(task.prompt, fallback_answer, tokens_used)
+            results.append(
+                TaskResult(
+                    task_id=task.task_id,
+                    answer=fallback_answer,
+                    path="local",
+                    tokens_used=tokens_used,
+                    confidence=round(confidence, 4),
+                    latency_ms=round(latency, 1),
+                )
+            )
+            continue
+
         t_remote_start = time.perf_counter()
         if confidence < config.confidence_threshold:
             log.info(
