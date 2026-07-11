@@ -168,7 +168,7 @@ def print_type_table(
 
 def main() -> int:
     # ---- Configuration ----
-    tasks_path = os.environ.get("BENCHMARK_TASKS_PATH", "./input/tasks.json")
+    tasks_path = os.environ.get("BENCHMARK_TASKS_PATH", "/input/tasks.json")
 
     # Use a throwaway output path — we don't want benchmark runs to overwrite
     # the main results file.
@@ -285,7 +285,7 @@ def main() -> int:
         "by_task_type": type_breakdown,
     }
 
-    output_dir = Path("./output")
+    output_dir = Path(os.environ.get("RESULTS_OUTPUT_PATH", "/output/results.json")).parent
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "benchmark_summary.json"
     output_path.write_text(
