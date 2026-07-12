@@ -4,19 +4,22 @@
 # =============================================================================
 # Build stage: compile llama-cpp-python, install dependencies, download Gemma model
 FROM python:3.11-slim AS builder
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     curl \
     coreutils \
     && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies (llama-cpp-python compiles against CPU-only BLAS
 # for maximum portability on linux/amd64; ROCm BLAS can be enabled at build
 # time by setting CMAKE_ARGS="-DLLAMA_HIPBLAS=ON" when deploying to AMD Instinct)
 RUN pip install --no-cache-dir \
-    llama-cpp-python==0.3.33 \
+    llama-cpp-python \
     requests \
     numpy
+
 # Download Gemma 2B GGUF model from Hugging Face.
 # This file is ~1.7 GB; the image will be self-contained once built.
 # If this URL becomes unavailable, search Hugging Face for "gemma-2-2b-it-GGUF"
@@ -36,9 +39,11 @@ RUN mkdir -p /models && \
         echo "FATAL: Downloaded model file ($SIZE bytes) is smaller than 1.4 GB — corrupt or partial download."; \
         exit 1; \
     fi
+
 # =============================================================================
 # Runtime stage: minimal image with only the installed packages and model file
 FROM python:3.11-slim
+
 # Install libgomp1 for llama-cpp-python's OpenMP shared library,
 # plus coreutils (for stat(1)) and curl (for runtime model fallback fetch).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,14 +51,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     coreutils \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /models /models
+
 # Create non-root user
 RUN addgroup --system --gid 1001 app && \
     adduser --system --uid 1001 --ingroup app app
+
 COPY --chown=app:app task_runner.py /app/task_runner.py
 COPY --chown=app:app solvers.py /app/solvers.py
+
 WORKDIR /app
 USER app
+
 ENTRYPOINT ["python", "task_runner.py"]
