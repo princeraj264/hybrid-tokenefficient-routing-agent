@@ -27,7 +27,6 @@ import json
 import logging
 import os
 import sys
-import threading
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -42,17 +41,6 @@ from solvers import (
     classify_task,
     VALID_TASK_TYPES,
 )
-
-# ---------------------------------------------------------------------------
-# Non-blocking local inference globals (daemon thread)
-# ---------------------------------------------------------------------------
-
-# Background thread + result container for local model inference.
-# Daemon=True so timed-out threads NEVER block process exit.
-_local_thread: threading.Thread | None = None
-_local_event = threading.Event()
-_local_result_container: list[tuple[str, float, int] | Exception] = []
-
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -122,31 +110,6 @@ class Config:
     )
     max_runtime_seconds: float = field(
         default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "420"))
-    )
-
-    # Task types that skip local inference entirely (known slow locally)
-    slow_task_types: set[str] = field(
-        default_factory=lambda: {"sentiment", "summarization"}
-    )
-
-    # Per-task-type local inference hard timeout (seconds).
-    # Fallback to 45s for any type not listed.
-    per_task_type_timeout_seconds: dict[str, float] = field(
-        default_factory=lambda: {
-            "math": 90,
-            "factual_qa": 30,
-            "code_generation": 150,
-            "logic": 150,
-        }
-    )
-
-    # Per-task-type max tokens for local generation.
-    # Fallback to 128 for any type not listed.
-    per_task_type_max_tokens: dict[str, int] = field(
-        default_factory=lambda: {
-            "code_generation": 192,
-            "logic": 192,
-        }
     )
 
     def __post_init__(self) -> None:
@@ -247,7 +210,7 @@ class LocalModel:
             )
             self._model = None
 
-    def generate(self, prompt: str, max_tokens: int = 128) -> tuple[str, float, int]:
+    def generate(self, prompt: str, max_tokens: int = 256) -> tuple[str, float, int]:
         """
         Generate an answer using the local model.
 
@@ -504,77 +467,6 @@ def write_results(results: list[TaskResult], path: str, strict: bool = False) ->
     log.info("Wrote %d results to %s", len(results), path)
 
 
-# ---------------------------------------------------------------------------
-# Non-blocking local inference with daemon thread
-# ---------------------------------------------------------------------------
-
-def _run_local_with_timeout(
-    model: LocalModel,
-    prompt: str,
-    max_tokens: int = 128,
-    timeout: float = 45.0,
-) -> tuple[str, float, int] | None:
-    """
-    Run model.generate() in a daemon thread so timeout NEVER blocks process exit.
-
-    Returns (answer, confidence, tokens_used) on success.
-    Returns None on timeout, concurrent-call collision, or exception.
-    """
-    global _local_thread, _local_event, _local_result_container
-
-    # If a previous local inference call is still running, skip to avoid
-    # concurrent calls into the same llama.cpp model context.
-    if _local_thread is not None and _local_thread.is_alive():
-        log.warning(
-            "Previous local inference still in flight — "
-            "skipping local for this task, escalating to remote."
-        )
-        return None
-
-    # Reset shared state
-    _local_event.clear()
-    _local_result_container.clear()
-
-    def _worker() -> None:
-        try:
-            result = model.generate(prompt, max_tokens=max_tokens)
-            _local_result_container.append(result)
-        except Exception as exc:
-            # Store exception so caller can log a warning instead of crashing
-            _local_result_container.append(Exception(str(exc)))
-        finally:
-            _local_event.set()
-
-    _local_thread = threading.Thread(target=_worker, daemon=True)
-    _local_thread.start()
-
-    # Wait for completion with timeout — daemon=True ensures the thread is
-    # killed automatically at process exit if it times out.
-    completed = _local_event.wait(timeout=timeout)
-
-    if not completed:
-        log.warning(
-            "Local inference timed out after %.1fs — escalating to remote.",
-            timeout,
-        )
-        return None
-
-    # Extract result
-    if not _local_result_container:
-        log.warning("Local inference returned no result — escalating to remote.")
-        return None
-
-    val = _local_result_container[0]
-    if isinstance(val, Exception):
-        log.warning(
-            "Local generation raised an exception: %s — escalating to remote.",
-            str(val),
-        )
-        return None
-
-    return val  # tuple[str, float, int]
-
-
 def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
     """
     Run the full routing pipeline over all input tasks.
@@ -639,6 +531,26 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
             )
             continue
 
+        # ---- Deadline check: skip ALL further processing (including local
+        # model inference) once the wall-clock budget is exhausted. ----
+        if deadline_hit:
+            log.warning(
+                "  → Deadline exceeded → skipping ALL inference for task %s, "
+                "returning fallback answer",
+                task.task_id,
+            )
+            results.append(
+                TaskResult(
+                    task_id=task.task_id,
+                    answer="[Deadline exceeded before this task could be processed - no inference attempted]",
+                    path="deadline_skipped",
+                    tokens_used=0,
+                    confidence=0.0,
+                    latency_ms=0.0,
+                )
+            )
+            continue
+
         # ---- Tier 1b: Math solver (deterministic, zero-cost) ----
         if task.task_type == "math":
             math_answer = try_solve_math(task.prompt)
@@ -666,39 +578,9 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                 tokens_used = 0
                 latency = 0.0
             else:
-                # Check if this task type should skip local entirely
-                if task.task_type in config.slow_task_types:
-                    log.info(
-                        "  → Task type '%s' routed directly to remote (known slow locally)",
-                        task.task_type,
-                    )
-                    answer = ""
-                    confidence = 0.0
-                    tokens_used = 0
-                    latency = 0.0
-                else:
-                    max_tok = config.per_task_type_max_tokens.get(
-                        task.task_type, 128,
-                    )
-                    timeout = config.per_task_type_timeout_seconds.get(
-                        task.task_type, 45,
-                    )
-                    elapsed = time.perf_counter() - pipeline_start
-                    remaining = max(0.0, max_runtime - elapsed)
-                    effective_timeout = min(timeout, remaining)
-                    t_start = time.perf_counter()
-                    result = _run_local_with_timeout(
-                        local_model, task.prompt,
-                        max_tokens=max_tok, timeout=effective_timeout,
-                    )
-                    if result is not None:
-                        answer, confidence, tokens_used = result
-                        latency = (time.perf_counter() - t_start) * 1000
-                    else:
-                        answer = ""
-                        confidence = 0.0
-                        tokens_used = 0
-                        latency = effective_timeout * 1000
+                t_start = time.perf_counter()
+                answer, confidence, tokens_used = local_model.generate(task.prompt)
+                latency = (time.perf_counter() - t_start) * 1000
 
             code = extract_code(answer)
             test_cases = extract_test_cases(task.prompt)
@@ -840,39 +722,9 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
             tokens_used = 0
             latency = 0.0
         else:
-            # Check if this task type should skip local entirely
-            if task.task_type in config.slow_task_types:
-                log.info(
-                    "  → Task type '%s' routed directly to remote (known slow locally)",
-                    task.task_type,
-                )
-                answer = ""
-                confidence = 0.0
-                tokens_used = 0
-                latency = 0.0
-            else:
-                max_tok = config.per_task_type_max_tokens.get(
-                    task.task_type, 128,
-                )
-                timeout = config.per_task_type_timeout_seconds.get(
-                    task.task_type, 45,
-                )
-                elapsed = time.perf_counter() - pipeline_start
-                remaining = max(0.0, max_runtime - elapsed)
-                effective_timeout = min(timeout, remaining)
-                t_start = time.perf_counter()
-                result = _run_local_with_timeout(
-                    local_model, task.prompt,
-                    max_tokens=max_tok, timeout=effective_timeout,
-                )
-                if result is not None:
-                    answer, confidence, tokens_used = result
-                    latency = (time.perf_counter() - t_start) * 1000
-                else:
-                    answer = ""
-                    confidence = 0.0
-                    tokens_used = 0
-                    latency = effective_timeout * 1000
+            t_start = time.perf_counter()
+            answer, confidence, tokens_used = local_model.generate(task.prompt)
+            latency = (time.perf_counter() - t_start) * 1000
 
         if confidence >= config.confidence_threshold:
             # For NER tasks, additionally verify no blatant hallucinations
