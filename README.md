@@ -1,4 +1,4 @@
-# Hybrid Token-Efficient Routing Agent
+??# Hybrid Token-Efficient Routing Agent
 
 > **AMD Developer Hackathon Act II — 2026** · A smart query router that minimises LLM token costs by tiered escalation: cache → local model → remote API.
 
@@ -15,7 +15,7 @@ Every LLM call costs tokens — and those costs add up fast, especially when you
 | Tier | Model / Source | Relative Cost | When It Fires |
 |------|---------------|---------------|---------------|
 | 🟢 **Cache** | Exact or semantic cache | **Free** (0 tokens) | Exact or near-exact repeat query |
-| 🟡 **Local** | Gemma 2B via `llama-cpp-python` (designed for ROCm on AMD Instinct™ GPU) | **Cheap** (local inference) | Moderate confidence from scoring |
+| 🟡 **Local** | Gemma 2B via `llama-cpp-python` (designed for ROCm on AMD Instinct(TM) GPU) | **Cheap** (local inference) | Moderate confidence from scoring |
 | 🔴 **Remote Economy** | Fireworks AI API — **Gemma 2 9B IT** (hosted) | **Moderate** (paid tokens) | Low confidence → first escalation tier |
 | 🔴 **Remote Premium** | Fireworks AI API — Qwen 3.7 Plus (`reasoning_effort: 'none'`) | **Full cost** (paid tokens) | Very low confidence OR Gemma fails verification |
 
@@ -83,8 +83,8 @@ The system is organised as a linear pipeline from the user interface through to 
 
 ```mermaid
 flowchart TD
-    User["👤 User"] --> Frontend["🌐 React + Vite\nFrontend (port 5173)"]
-    Frontend --> Agent["⚙️ FastAPI / Agent\n(task_runner.py)"]
+    User["👤 User"] --> Frontend["React + Vite\nFrontend (port 5173)"]
+    Frontend --> Agent["FastAPI / Agent\n(task_runner.py)"]
     Agent --> Router["🔀 Router\n(Confidence Scorer)"]
     Router --> Cache["🟢 In-Memory Cache\n(cosine similarity\nover embeddings)"]
     Router --> Local["🟡 Local Gemma 2B\n(llama-cpp-python\n· log-prob scoring)"]
@@ -161,12 +161,12 @@ The frontend is a single-page chat app that visualises every routing decision in
 | Layer | Choice |
 |-------|--------|
 | Runtime | Python 3.11 |
-| Local model | **Gemma 2B** via `llama-cpp-python` (designed for ROCm on AMD Instinct™ GPU) |
+| Local model | **Gemma 2B** via `llama-cpp-python` (designed for ROCm on AMD Instinct(TM) GPU) |
 | Remote API | Fireworks AI (Gemma 2 9B IT → Qwen 3.7 Plus, two-tier escalation) |
 
 The agent is a **standalone batch processor** (`agent/task_runner.py`) that reads a JSON array of tasks, routes each through the three-tier pipeline, and writes results to a JSON file. It is not a web server — it runs once top-to-bottom and exits. A Dockerfile and docker-compose service definition are included for containerised execution.
 
-> **⚠️ For AMD Hackathon Track 1 submission:** build and push `agent/Dockerfile` (the task-runner batch image) — this is the graded artifact. `agent/Dockerfile.server` and `Dockerfile.frontend` are for local demo purposes only and are **not** the graded artifact.
+> **Note: For AMD Hackathon Track 1 submission:** build and push `agent/Dockerfile` (the task-runner batch image) — this is the graded artifact. `agent/Dockerfile.server` and `Dockerfile.frontend` are for local demo purposes only and are **not** the graded artifact.
 
 ---
 
@@ -322,9 +322,9 @@ The following metrics are collected over a diverse task set spanning factual QA,
 | 🟡 **Local resolution rate** | — % | Queries answered by local Gemma 2B (confidence ≥ threshold) |
 | 🔴 **Remote escalation rate** | — % | Queries forwarded to Fireworks (economy or premium tier) |
 | 💰 **Average token savings** | — % | Tokens saved vs. always-remote baseline |
-| ⏱️ **Average latency (local)** | — ms | Mean end-to-end time for local inference path |
-| ⏱️ **Average latency (remote)** | — ms | Mean end-to-end time for remote escalation path |
-| ⏱️ **Average latency (cache)** | — ms | Mean end-to-end time for cache-hit path |
+| **Average latency (local)** | — ms | Mean end-to-end time for local inference path |
+| **Average latency (remote)** | — ms | Mean end-to-end time for remote escalation path |
+| **Average latency (cache)** | — ms | Mean end-to-end time for cache-hit path |
 
 ### How to run the benchmark
 
@@ -342,7 +342,7 @@ The benchmark evaluates every task through the full routing pipeline (cache → 
 
 ## Gemma Prize Track
 
-This project participates in the **Gemma Prize Track** by using **Gemma 2B** as the local inference model. The model runs via `llama-cpp-python` (ROCm BLAS support is compiled in, and deployment on AMD Instinct™ GPU via the AMD Developer Cloud is in progress).
+This project participates in the **Gemma Prize Track** by using **Gemma 2B** as the local inference model. The model runs via `llama-cpp-python` (ROCm BLAS support is compiled in, and deployment on AMD Instinct(TM) GPU via the AMD Developer Cloud is in progress).
 
 Integration follows Fireworks AI's Gemma model path for the remote fallback tier, making Gemma available at both the local and remote levels. The local Gemma handles the majority of routine queries (saving tokens), while Fireworks escalations use a larger model for complex cases.
 
@@ -352,17 +352,17 @@ Integration follows Fireworks AI's Gemma model path for the remote fallback tier
 
 This project was built specifically for the **AMD Developer Hackathon Act II — Track 1**, and AMD hardware is central to both its architecture and its value proposition.
 
-### ROCm on AMD Instinct™ GPU
+### ROCm on AMD Instinct(TM) GPU
 
-The local inference tier is built on [`llama-cpp-python`](https://github.com/abetlen/llama-cpp-python), which supports **ROCm** (Radeon Open Compute) as a first-class BLAS backend. ROCm enables Gemma 2B to run on AMD Instinct™ accelerators with near-native performance, matching or exceeding CPU-only throughput while freeing system memory for other tasks.
+The local inference tier is built on [`llama-cpp-python`](https://github.com/abetlen/llama-cpp-python), which supports **ROCm** (Radeon Open Compute) as a first-class BLAS backend. ROCm enables Gemma 2B to run on AMD Instinct(TM) accelerators with near-native performance, matching or exceeding CPU-only throughput while freeing system memory for other tasks.
 
-- **Cost efficiency** — Running inference on an AMD Instinct™ GPU via ROCm shifts the heavy lifting from paid API tokens to local compute, which has a fixed (and often already-sunk) cost.
+- **Cost efficiency** — Running inference on an AMD Instinct(TM) GPU via ROCm shifts the heavy lifting from paid API tokens to local compute, which has a fixed (and often already-sunk) cost.
 - **Latency reduction** — GPU-accelerated inference reduces Gemma 2B end-to-end latency from several seconds (CPU) to sub-second, making the local tier viable for interactive applications.
 - **Privacy** — Queries handled by the cache or local model never leave the host, a critical advantage for sensitive or regulated data.
 
 ### AMD Developer Cloud
 
-Deployment on the **[AMD Developer Cloud](https://www.amd.com/en/developer/cloud.html)** is in progress. The Developer Cloud provides on-demand access to AMD Instinct™ accelerators, allowing the routing agent to run on production-grade hardware without requiring physical GPU ownership.
+Deployment on the **[AMD Developer Cloud](https://www.amd.com/en/developer/cloud.html)** is in progress. The Developer Cloud provides on-demand access to AMD Instinct(TM) accelerators, allowing the routing agent to run on production-grade hardware without requiring physical GPU ownership.
 
 ### Why This Matters
 
