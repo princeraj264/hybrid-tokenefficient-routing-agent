@@ -1,5 +1,5 @@
-# =============================================================================
-# Hybrid Token-Efficient Routing Agent — Task Runner Dockerfile
+﻿# =============================================================================
+# Hybrid Token-Efficient Routing Agent â€” Task Runner Dockerfile
 # Target: linux/amd64
 # =============================================================================
 # Build stage: compile llama-cpp-python, install dependencies, download Gemma model
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # for maximum portability on linux/amd64; ROCm BLAS can be enabled at build
 # time by setting CMAKE_ARGS="-DLLAMA_HIPBLAS=ON" when deploying to AMD Instinct)
 RUN pip install --no-cache-dir \
-    llama-cpp-python \
+    llama-cpp-python==0.3.33 \
     requests \
     numpy
 
@@ -32,11 +32,11 @@ RUN mkdir -p /models && \
     SIZE=$(stat -c%s /models/gemma-2b-it-Q4_K_M.gguf 2>/dev/null || stat -f%z /models/gemma-2b-it-Q4_K_M.gguf 2>/dev/null) && \
     echo "Downloaded model: size=$SIZE bytes, sha256=$SHA256" && \
     if [ -n "$EXPECTED_MODEL_SHA256" ] && [ "$SHA256" != "$EXPECTED_MODEL_SHA256" ]; then \
-        echo "FATAL: SHA256 mismatch — expected $EXPECTED_MODEL_SHA256, got $SHA256"; \
+        echo "FATAL: SHA256 mismatch â€” expected $EXPECTED_MODEL_SHA256, got $SHA256"; \
         exit 1; \
     fi && \
     if [ "$SIZE" -lt 1400000000 ]; then \
-        echo "FATAL: Downloaded model file ($SIZE bytes) is smaller than 1.4 GB — corrupt or partial download."; \
+        echo "FATAL: Downloaded model file ($SIZE bytes) is smaller than 1.4 GB â€” corrupt or partial download."; \
         exit 1; \
     fi
 
