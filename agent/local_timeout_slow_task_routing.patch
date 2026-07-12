@@ -1,43 +1,53 @@
 From: Hybrid Token-Efficient Routing Agent
 Date: 2026
-Subject: Add per-task timeout, type-aware routing, and tighter local budget
+Subject: Per-task timeout + type-aware routing (non-blocking executor)
 
-Three changes to prevent fast-burning tasks from starving the pipeline:
+Fix a critical bug in the previous approach: ThreadPoolExecutor used as a
+context manager calls shutdown(wait=True) on exit, which blocks until the
+background thread finishes — defeating the timeout entirely.
 
-1. PER-TASK HARD TIMEOUT (LOCAL_TASK_TIMEOUT_SECONDS, default 45s):
-   Wraps local_model.generate() in a threaded timeout. If exceeded, the
-   task is treated as "local failed" and escalates to remote immediately.
-
-2. TYPE-AWARE ROUTING (SLOW_TASK_TYPES, default {"sentiment","summarization"}):
-   Tasks known to produce slow local inference skip the local model
-   entirely and go straight to the remote escalation tier.
-
-3. TIGHTER LOCAL BUDGET:
-   Default max_tokens reduced from 256 to 128 so even tasks that do run
-   locally consume less wall-clock time.
+New approach:
+1. Persistent module-level ThreadPoolExecutor — never shut down.
+2. Track _local_future; if a previous call is still in-flight (not done()),
+   skip local inference to avoid concurrent llama.cpp access.
+3. On timeout, just return None; abandoned thread runs to completion
+   silently with its results discarded (zero wall-clock cost to caller).
+4. Per-task-type timeouts via dict (math=90s, factual_qa=30s, others=45s).
 
 ---
- agent/task_runner.py | 86 ++++++++++++++++++++++++++++++++++++++++++++--------
- 1 file changed, 73 insertions(+), 13 deletions(-)
+ agent/task_runner.py | 118 +++++++++++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 103 insertions(+), 15 deletions(-)
 
 diff --git a/agent/task_runner.py b/agent/task_runner.py
-index 977e172..d3f2a0e 100644
+index 977e172..e4f8b2a 100644
 --- a/agent/task_runner.py
 +++ b/agent/task_runner.py
-@@ -30,6 +30,7 @@ from __future__ import annotations
+@@ -30,8 +30,18 @@ from __future__ import annotations
+ 
  import time
  from dataclasses import dataclass, field, asdict
- from pathlib import Path
 +import concurrent.futures
+ from pathlib import Path
  from typing import Any
  
++# Persistent single-worker pool for local model inference.
++# *Never* shut down — abandoned threads run to completion silently
++# in the background so the caller is never blocked.
++_LOCAL_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
++_local_future: concurrent.futures.Future | None = None
++
  from solvers import (
-@@ -113,6 +114,14 @@ class Config:
+     try_solve_math,
+     extract_code,
+@@ -108,10 +118,18 @@ class Config:
      max_runtime_seconds: float = field(
          default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "540"))
      )
-+    local_task_timeout_seconds: float = field(
-+        default_factory=lambda: float(os.environ.get("LOCAL_TASK_TIMEOUT_SECONDS", "45"))
++    per_task_type_timeout_seconds: dict[str, float] = field(
++        default_factory=lambda: {
++            "math": 90,
++            "factual_qa": 30,
++        }
 +    )
 +    slow_task_types: set[str] = field(
 +        default_factory=lambda: {"sentiment", "summarization"}
@@ -45,7 +55,9 @@ index 977e172..d3f2a0e 100644
  
      def __post_init__(self) -> None:
          raw = os.environ.get("ALLOWED_MODELS", "")
-@@ -210,7 +219,7 @@ class LocalModel:
+         if raw:
+             self.allowed_models = [m.strip() for m in raw.split(",") if m.strip()]
+@@ -210,7 +228,7 @@ class LocalModel:
              )
              self._model = None
  
@@ -54,34 +66,62 @@ index 977e172..d3f2a0e 100644
          """
          Generate an answer using the local model.
  
-@@ -466,6 +475,32 @@ def write_results(results: list[TaskResult], path: str, strict: bool = False) ->
+@@ -467,6 +485,76 @@ def write_results(results: list[TaskResult], path: str, strict: bool = False) ->
      log.info("Wrote %d results to %s", len(results), path)
  
  
 +def _run_local_with_timeout(
-+    model: LocalModel, prompt: str, max_tokens: int, timeout: float,
-+) -> tuple[str, float, int]:
-+    """Run local model generation with a hard per-task timeout.
++    model: LocalModel,
++    prompt: str,
++    max_tokens: int,
++    timeout: float,
++) -> tuple[str, float, int] | None:
++    """
++    Run local model generation with a hard per-task timeout.
++
++    Uses a module-level persistent ThreadPoolExecutor so the pool is
++    *never shut down*.  On timeout the background thread is abandoned
++    (it completes silently with results discarded) rather than blocking
++    the caller.
 +
 +    Returns (answer, confidence, tokens_used) on success.
-+    Raises TimeoutError if generation exceeds *timeout* seconds.
++    Returns None if:
++      * The generation exceeded *timeout* seconds (thread abandoned).
++      * A previous timed-out generation is still in-flight (llama.cpp
++        context is not safe for concurrent calls).
++      * The underlying generate() raised an exception.
 +    """
-+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-+        future = pool.submit(model.generate, prompt, max_tokens)
-+        try:
-+            return future.result(timeout=timeout)
-+        except Exception as exc:
-+            if isinstance(exc, concurrent.futures.TimeoutError):
-+                raise TimeoutError(
-+                    f"Local generation timed out after {timeout:.0f}s"
-+                )
-+            raise
++    global _local_future
++
++    # If a previous generation is still running in the background, we
++    # cannot safely call into llama.cpp again — escalate to remote
++    # rather than risking concurrent access to the model context.
++    if _local_future is not None and not _local_future.done():
++        log.warning(
++            "Local model busy — previous call still in-flight, "
++            "skipping local inference",
++        )
++        return None
++
++    _local_future = _LOCAL_POOL.submit(model.generate, prompt, max_tokens)
++
++    try:
++        return _local_future.result(timeout=timeout)
++    except concurrent.futures.TimeoutError:
++        log.warning(
++            "Local generation timed out after %.0fs — abandoning "
++            "background thread (results discarded)",
++            timeout,
++        )
++        return None
++    except Exception as exc:
++        log.warning("Local generation failed: %s", exc)
++        _local_future = None
++        return None
 +
 +
  def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
-     """
-     Run the full routing pipeline over all input tasks.
-@@ -549,10 +584,28 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+@@ -549,10 +637,30 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
          # ---- Tier 2: Code verification pipeline ----
          if task.task_type in ("code_debugging", "code_generation"):
              if not local_available:
@@ -104,28 +144,31 @@ index 977e172..d3f2a0e 100644
                  t_start = time.perf_counter()
 -                answer, confidence, tokens_used = local_model.generate(task.prompt)
 -                latency = (time.perf_counter() - t_start) * 1000
-+                try:
-+                    answer, confidence, tokens_used = _run_local_with_timeout(
-+                        local_model, task.prompt,
-+                        max_tokens=128,
-+                        timeout=config.local_task_timeout_seconds,
-+                    )
++                timeout = config.per_task_type_timeout_seconds.get(
++                    task.task_type, 45,
++                )
++                result = _run_local_with_timeout(
++                    local_model, task.prompt,
++                    max_tokens=128, timeout=timeout,
++                )
++                if result is not None:
++                    answer, confidence, tokens_used = result
 +                    latency = (time.perf_counter() - t_start) * 1000
-+                except TimeoutError:
++                else:
 +                    log.warning(
-+                        "  → Local inference timed out after %ds for task %s — "
-+                        "escalating to remote",
-+                        config.local_task_timeout_seconds,
++                        "  → Local inference failed or timed out for "
++                        "task %s — escalating to remote",
 +                        task.task_id,
 +                    )
 +                    answer = ""
 +                    confidence = 0.0
 +                    tokens_used = 0
-+                    latency = config.local_task_timeout_seconds * 1000
++                    latency = timeout * 1000
  
              code = extract_code(answer)
              test_cases = extract_test_cases(task.prompt)
-@@ -695,9 +748,27 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+@@ -695,9 +803,30 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+         # ---- Tier 3: Local inference (confidence-based) ----
          if not local_available:
              log.info("  → Local model unavailable — escalating directly to remote")
              answer = ""
@@ -146,23 +189,25 @@ index 977e172..d3f2a0e 100644
              t_start = time.perf_counter()
 -            answer, confidence, tokens_used = local_model.generate(task.prompt)
 -            latency = (time.perf_counter() - t_start) * 1000
-+            try:
-+                answer, confidence, tokens_used = _run_local_with_timeout(
-+                    local_model, task.prompt,
-+                    max_tokens=128,
-+                    timeout=config.local_task_timeout_seconds,
-+                )
++            timeout = config.per_task_type_timeout_seconds.get(
++                task.task_type, 45,
++            )
++            result = _run_local_with_timeout(
++                local_model, task.prompt,
++                max_tokens=128, timeout=timeout,
++            )
++            if result is not None:
++                answer, confidence, tokens_used = result
 +                latency = (time.perf_counter() - t_start) * 1000
-+            except TimeoutError:
++            else:
 +                log.warning(
-+                    "  → Local inference timed out after %ds for task %s — "
-+                    "escalating to remote",
-+                    config.local_task_timeout_seconds,
++                    "  → Local inference failed or timed out for "
++                    "task %s — escalating to remote",
 +                    task.task_id,
 +                )
 +                answer = ""
 +                confidence = 0.0
 +                tokens_used = 0
-+                latency = config.local_task_timeout_seconds * 1000
++                latency = timeout * 1000
  
          if confidence >= config.confidence_threshold:
