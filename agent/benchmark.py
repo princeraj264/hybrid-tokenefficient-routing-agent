@@ -1,6 +1,6 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-Hybrid Token-Efficient Routing Agent â€” Benchmark Runner
+Hybrid Token-Efficient Routing Agent — Benchmark Runner
 ========================================================
 
 Manually-run script that loads a task set, runs the full four-tier pipeline
@@ -16,7 +16,7 @@ Usage:
     export FIREWORKS_API_KEY=fw_...
     python agent/benchmark.py
 
-The script does NOT write individual task results to a separate file â€” only
+The script does NOT write individual task results to a separate file — only
 the aggregated summary.  Use the standard TASKS_INPUT_PATH / RESULTS_OUTPUT_PATH
 env vars in task_runner.py for full result inspection.
 """
@@ -41,7 +41,7 @@ from task_runner import (
 )
 
 # ---------------------------------------------------------------------------
-# Logging â€” stderr only, stdout is reserved for the table
+# Logging — stderr only, stdout is reserved for the table
 # ---------------------------------------------------------------------------
 
 logging.basicConfig(
@@ -86,9 +86,9 @@ def classify_path(r: TaskResult, task_map: dict[str, Task]) -> str:
 
 
 def pct(part: int, total: int) -> str:
-    """Format as percentage string, or 'â€”' if total is 0."""
+    """Format as percentage string, or '—' if total is 0."""
     if total == 0:
-        return "   â€”"
+        return "   —"
     return f"{100.0 * part / total:6.1f}%"
 
 
@@ -109,12 +109,12 @@ def print_overall_table(
     estimated_savings: int,
 ) -> None:
     """Print the overall summary table to stdout."""
-    sep = "â”€" * 78
+    sep = "─" * 78
 
     print()
-    print("â•­" + "â”€" * 76 + "â•®")
-    print(f"â”‚  {'Hybrid Routing Agent â€” Benchmark Results':^72s}  â”‚")
-    print("â•°" + "â”€" * 76 + "â•¯")
+    print("╭" + "─" * 76 + "╮")
+    print(f"│  {'Hybrid Routing Agent — Benchmark Results':^72s}  │")
+    print("╰" + "─" * 76 + "╯")
     print()
 
     rows = [
@@ -142,7 +142,7 @@ def print_type_table(
     total_tasks: int,
 ) -> None:
     """Print per-task-type breakdown table to stdout."""
-    sep = "â”€" * 78
+    sep = "─" * 78
 
     print("  Per-task-type breakdown:")
     print(f"  {'Task type':<22s} {'Count':>8s} {'%':>9s} {'Cache':>8s} {'Math':>8s} {'Model':>8s} {'Remote':>8s} {'Avg tok':>8s}")
@@ -166,12 +166,12 @@ def print_type_table(
 def print_aggregate_summary(summary: dict[str, Any]) -> None:
     """Print the aggregate summary to stdout."""
     overall = summary["overall"]
-    sep = "â”€" * 68
+    sep = "─" * 68
 
     print()
-    print("â•­" + "â”€" * 66 + "â•®")
-    print(f"â”‚  {'Aggregate Metrics Summary':^62s}  â”‚")
-    print("â•°" + "â”€" * 66 + "â•¯")
+    print("╭" + "─" * 66 + "╮")
+    print(f"│  {'Aggregate Metrics Summary':^62s}  │")
+    print("╰" + "─" * 66 + "╯")
     print()
 
     print(f"  {'Metric':<32s} {'Value':>16s}")
@@ -261,9 +261,9 @@ def build_aggregate_summary(
 
 def main() -> int:
     # ---- Configuration ----
-    tasks_path = os.environ.get("BENCHMARK_TASKS_PATH", "/input/tasks.json")
+    tasks_path = os.environ.get("BENCHMARK_TASKS_PATH", "./input/tasks.json")
 
-    # Use a throwaway output path â€” we don't want benchmark runs to overwrite
+    # Use a throwaway output path — we don't want benchmark runs to overwrite
     # the main results file.
     config = Config()
     config.tasks_input_path = tasks_path
@@ -280,11 +280,11 @@ def main() -> int:
     try:
         results, tasks = run_pipeline(config)
     except (FileNotFoundError, ValueError, TypeError) as e:
-        log.error("Pipeline failed â€” %s", e)
+        log.error("Pipeline failed — %s", e)
         return 1
 
     if not results:
-        log.error("No results produced â€” check input file and model config.")
+        log.error("No results produced — check input file and model config.")
         return 1
 
     # Build a task_id -> Task map for type lookups
