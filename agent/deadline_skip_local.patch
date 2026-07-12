@@ -1,0 +1,77 @@
+From: Hybrid Token-Efficient Routing Agent
+Date: 2026
+Subject: Skip local model inference after runtime deadline
+
+The runtime deadline guard (MAX_RUNTIME_SECONDS) previously only prevented
+remote escalation — remaining tasks still ran a full local Gemma inference
+pass (80-150s each) before the fallback logic kicked in, causing total
+wall-clock runtime to exceed the 10-minute hard limit.
+
+Fix: once deadline_hit is True, skip local_model.generate() entirely for
+all remaining tasks. Cache hits and deterministic math solves still proceed
+(since they cost <1ms). Everything else returns a zero-cost placeholder.
+
+Also tighten MAX_RUNTIME_SECONDS default from 540 to 420 to leave more
+safety margin for container startup and model load time.
+
+---
+ agent/task_runner.py | 33 ++++++++++++++++++++++++++++-----
+ 1 file changed, 28 insertions(+), 5 deletions(-)
+
+diff --git a/agent/task_runner.py b/agent/task_runner.py
+index 977e172..b2c4e6f 100644
+--- a/agent/task_runner.py
++++ b/agent/task_runner.py
+@@ -109,7 +109,7 @@ class Config:
+     )
+     max_runtime_seconds: float = field(
+-        default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "540"))
++        default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "420"))
+     )
+ 
+     def __post_init__(self) -> None:
+@@ -502,15 +502,16 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+     deadline_hit = False
+ 
+     for task in tasks:
+-        # Check wall-clock deadline — once hit, skip all remote escalation
++        # Check wall-clock deadline — once hit, skip all model inference
+         if not deadline_hit:
+             elapsed = time.perf_counter() - pipeline_start
+             if elapsed > max_runtime:
+                 deadline_hit = True
+                 remaining = len(tasks) - len(results)
+                 log.warning(
+                     "RUN DEADLINE REACHED: %.1fs elapsed (limit %.0fs). "
+-                    "Skipping remote escalation for %d remaining task(s) — "
+-                    "falling back to best-effort local answers.",
++                    "Skipping model inference for %d remaining task(s) — "
++                    "returning zero-cost fallback answers.",
+                     elapsed, max_runtime, remaining,
+                 )
+ 
+@@ -548,6 +549,28 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
+                 continue
+             # If try_solve_math returned None, fall through to local inference
+ 
++        # ---- Deadline guard: skip all model inference after deadline ----
++        if deadline_hit:
++            log.warning(
++                "Deadline exceeded — skipping local inference for task %s, "
++                "returning fallback answer",
++                task.task_id,
++            )
++            fallback_answer = "[Deadline exceeded — fallback answer]"
++            results.append(
++                TaskResult(
++                    task_id=task.task_id,
++                    answer=fallback_answer,
++                    path="local",
++                    deadline_fallback=True,
++                )
++            )
++            continue
++
+         # ---- Tier 2: Code verification pipeline ----
+         if task.task_type in ("code_debugging", "code_generation"):
+             if not local_available:
