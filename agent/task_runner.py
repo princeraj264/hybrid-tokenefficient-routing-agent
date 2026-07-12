@@ -109,7 +109,7 @@ class Config:
         in ("1", "true", "yes")
     )
     max_runtime_seconds: float = field(
-        default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "540"))
+        default_factory=lambda: float(os.environ.get("MAX_RUNTIME_SECONDS", "420"))
     )
 
     def __post_init__(self) -> None:
@@ -527,6 +527,26 @@ def run_pipeline(config: Config) -> tuple[list[TaskResult], list[Task]]:
                     answer=answer,
                     path="cache",
                     tokens_used=0,
+                )
+            )
+            continue
+
+        # ---- Deadline check: skip ALL further processing (including local
+        # model inference) once the wall-clock budget is exhausted. ----
+        if deadline_hit:
+            log.warning(
+                "  → Deadline exceeded → skipping ALL inference for task %s, "
+                "returning fallback answer",
+                task.task_id,
+            )
+            results.append(
+                TaskResult(
+                    task_id=task.task_id,
+                    answer="[Deadline exceeded before this task could be processed - no inference attempted]",
+                    path="deadline_skipped",
+                    tokens_used=0,
+                    confidence=0.0,
+                    latency_ms=0.0,
                 )
             )
             continue
