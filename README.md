@@ -318,13 +318,12 @@ The following metrics are collected over a diverse task set spanning factual QA,
 
 | Metric | Value | Notes |
 |--------|-------|--------|
-| 🟢 **Cache hit rate** | — % | Queries answered instantly from in-memory cache |
-| 🟡 **Local resolution rate** | — % | Queries answered by local Gemma 2B (confidence ≥ threshold) |
-| 🔴 **Remote escalation rate** | — % | Queries forwarded to Fireworks (economy or premium tier) |
-| 💰 **Average token savings** | — % | Tokens saved vs. always-remote baseline |
-| ⏱️ **Average latency (local)** | — ms | Mean end-to-end time for local inference path |
-| ⏱️ **Average latency (remote)** | — ms | Mean end-to-end time for remote escalation path |
-| ⏱️ **Average latency (cache)** | — ms | Mean end-to-end time for cache-hit path |
+| 🟢 **Cache hit rate** | 0.0% | Queries answered instantly from in-memory cache |
+| 🟡 **Local resolution rate** | 75.0% | Queries answered by local Gemma 2B (confidence >= threshold) |
+| 🔴 **Remote escalation rate** | 25.0% | Queries forwarded to Fireworks AI |
+| 💰 **Total tokens used** | 1,735 tokens | Across all 8 sample tasks |
+| 💰 **Average tokens per task** | 217 tokens | Mean tokens per task across the full pipeline |
+| 💰 **Estimated tokens saved** | 981 tokens (~36%) | Vs. an always-remote baseline for the same 8 tasks |
 
 ### How to run the benchmark
 
