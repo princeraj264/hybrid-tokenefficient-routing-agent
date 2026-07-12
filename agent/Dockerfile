@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # Hybrid Token-Efficient Routing Agent - Task Runner Dockerfile
 # Target: linux/amd64
 # =============================================================================
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
-    llama-cpp-python \
+    llama-cpp-python==0.3.33 \
     requests \
     numpy
 
