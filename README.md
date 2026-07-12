@@ -318,13 +318,13 @@ The following metrics are collected over a diverse task set spanning factual QA,
 
 | Metric | Value | Notes |
 |--------|-------|--------|
-| 🟢 **Cache hit rate** | — % | Queries answered instantly from in-memory cache |
-| 🟡 **Local resolution rate** | — % | Queries answered by local Gemma 2B (confidence ≥ threshold) |
-| 🔴 **Remote escalation rate** | — % | Queries forwarded to Fireworks (economy or premium tier) |
-| 💰 **Average token savings** | — % | Tokens saved vs. always-remote baseline |
-| **Average latency (local)** | — ms | Mean end-to-end time for local inference path |
-| **Average latency (remote)** | — ms | Mean end-to-end time for remote escalation path |
-| **Average latency (cache)** | — ms | Mean end-to-end time for cache-hit path |
+| 🟢 **Cache hit rate** | 0% (0/8) | Queries answered instantly from in-memory cache |
+| 🟡 **Local resolution rate** | 37.5% (3/8) | Queries answered by local Gemma 2B (confidence ≥ threshold) |
+| 🔴 **Remote escalation rate** | 62.5% (5/8) | Queries forwarded to Fireworks (economy or premium tier) |
+| 💰 **Average token savings** | TBD | Scales with local resolution rate; always-remote baseline run planned |
+| **Average latency (local)** | ~59,750 ms | Mean end-to-end time for local inference path (n=3) |
+| **Average latency (remote)** | ~5,830 ms | Mean end-to-end time for remote escalation path (n=5) |
+| **Average latency (cache)** | N/A | No cache hits observed in test batch |
 
 ### How to run the benchmark
 
